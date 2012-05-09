@@ -27,10 +27,17 @@ splitEvery n list =
 
 replaceItem:: Int -> [a] -> a -> [a]
 replaceItem n list item =
-    replaceItem' $ splitAt3 n list
-    where
-        replaceItem' (left, just, right) =
-            left ++ [item] ++ right
+  let
+    (left, _, right) = splitAt3 n list
+  in
+    left ++ [item] ++ right
+
+removeItem:: Int -> [a] -> [a]
+removeItem n list =
+  let
+    (left, _, right) = splitAt3 n list
+  in
+    left ++ right
 
 splitAt3:: Int -> [a] -> ([a], a, [a])
 splitAt3 n list =
