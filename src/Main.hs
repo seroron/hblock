@@ -15,9 +15,8 @@
 
 import System.Random as Random
 import Graphics.UI.SDL as SDL
-
-import Data.Map (Map)
-import qualified Data.Map as Map
+import Data.List
+import Data.Word
 
 import Util
 
@@ -33,11 +32,11 @@ data ImageSet = ImageSet {
 }
 
 data ImageObj = ImageObj {
-  x :: Int
-  y :: Int
-  width :: Int
-  height :: Int
-  alpha :: Int
+  x :: Int,
+  y :: Int,
+  width :: Int,
+  height :: Int,
+  alpha :: Word8,
   image :: Surface
 }
 
@@ -49,12 +48,15 @@ data BlockState =
   BS_Stay | BS_Dropping | BS_Removing
 
 data BlockObj = BlockObj {
-  posX :: Int
-  posY :: Int
-  state :: BlockState
-  blocktype :: BlockType
-  imageobj :: ImageObj
-}
+  posX :: Int,
+  posY :: Int,
+  state :: BlockState,
+  blocktype :: BlockType,
+  imageObj :: Maybe ImageObj
+} deriving Eq
+
+nullBlockObj =
+    BlockObj (-1) (-1) BS_Stay BlockNone Nothing
 
 main :: IO ()
 main = do
@@ -62,7 +64,7 @@ main = do
     SDL.setVideoMode 640 480 32 []
     SDL.setCaption "Video Test!" "video test"
     imageSet <- loadImages
-    fieldList <- initField
+    fieldList <- initField imageSet
     mainLoop fieldList imageSet
     SDL.quit
 
@@ -76,23 +78,23 @@ loadImages = do
 mainLoop:: [[BlockObj]] -> ImageSet -> IO()
 mainLoop fieldList imageSet = do
     SDL.delay 10
-    nextFrame
-    renderFrame 
-      
+    fieldList' <- nextFrame fieldList imageSet
+    renderFrame fieldList'
+
     event <- SDL.pollEvent
     ret <- checkEvent event
-    if ret==True then mainLoop fieldList imageSet
-      else return ()
+    if ret==True then mainLoop fieldList' imageSet
+                 else return ()
 
 nextFrame:: [[BlockObj]] -> ImageSet -> IO[[BlockObj]]
-nextFrame = do
+nextFrame fieldList imageSet = do
   (mouseX, mouseY, mouseBtn) <- getMouseState
-  let mouseLeft  = any (\x -> x==ButtonLeft) mBtn
-  let mouseRight = any (\x -> x==ButtonRight) mBtn
+  let mouseLeft  = any (\x -> x==ButtonLeft) mouseBtn
+  let mouseRight = any (\x -> x==ButtonRight) mouseBtn
   let (x, y) = mousePos2fieldPos (mouseX, mouseY)
   let list = if mouseLeft==True then eraseBlock fieldList else fieldList
 --  let list2 = if mouseRight==True then dropBlock list else list
-  appendBlock list2
+  appendBlock list imageSet
 
 renderFrame:: [[BlockObj]] -> IO()
 renderFrame fieldList = do
@@ -104,7 +106,7 @@ renderFrame fieldList = do
         (SDL.Pixel 0x00000000)
   renderFiled fieldList mainSurf
   SDL.flip mainSurf
-  
+
 checkEvent (KeyUp (Keysym SDLK_ESCAPE _ _)) =
     return False
 checkEvent (MouseButtonUp x y _) = do
@@ -112,27 +114,28 @@ checkEvent (MouseButtonUp x y _) = do
 checkEvent _         =
     return True
 
-createBlockObj:: x -> y -> BlockType -> ImageSet -> BlockObj
+createBlockObj:: Int -> Int -> BlockType -> ImageSet -> BlockObj
 createBlockObj x y blocktype imageset =
   let
-    image 
+    image
       | blocktype == BlockA = blockA imageset
       | blocktype == BlockB = blockB imageset
       | blocktype == BlockC = blockC imageset
-                              
-    imageobj = ImageObj x*32 y*32 32 32 255 image 
+
+    imageobj:: Maybe ImageObj
+    imageobj = Just (ImageObj (x*32) (y*32) 32 32 255 image)
   in
-   BlockObj x y BS_Stay blocktype imageobj
+    BlockObj x y BS_Stay blocktype imageobj
 
 initField:: ImageSet -> IO [[BlockObj]]
 initField imageset = do
     blocktypelist <- getBlockTypeList
-    return $ splitEvery fieldBlockMaxX $ 
-          map 
-            (\((x, y), blocktype) -> createBlockObj x y blocktype imageset) 
-            zip [(x, y) | x<-[0..fieldBlockMaxX], y<-[0..fieldBlockMaxY]] $ 
+    return $ splitEvery fieldBlockMaxX $
+          map
+            (\((x, y), blocktype) -> createBlockObj x y blocktype imageset)
+            zip [(x, y) | x<-[0..fieldBlockMaxX], y<-[0..fieldBlockMaxY]] $
               take (fieldBlockMaxX*fieldBlockMaxY) $ blocktypelist
-        
+
     -- where
     --     putGuard:: [[BlockType]] -> [[BlockType]]
     --     putGuard  list = putGuardX $ putGuardY list
@@ -174,12 +177,15 @@ initField imageset = do
 
 renderFiled:: [[BlockObj]] -> Surface -> IO()
 renderFiled fieldList mainSurf =
-  mapM_ (\b -> render (imageobj b)) $ foldl (++) [] fieldList
+  mapM_ (\b -> render (imageObj b)) $ foldl (++) [] fieldList
   where
-    render imageobj =
+    render:: Maybe ImageObj -> IO Bool
+    render Nothing = return False
+
+    render (Just imageobj) = do
       SDL.setAlpha (image imageobj) [SrcAlpha] (alpha imageobj)
-      let rect = (Just (Rect (x imageobj) (y imageobj) (width imageobj) (height imageobj)))
-      SDL.blitSurface (image imageobj) Nothing mainSurf rect
+      SDL.blitSurface (image imageobj) Nothing mainSurf
+        (Just (Rect (x imageobj) (y imageobj) (width imageobj) (height imageobj)))
 
 mousePos2fieldPos:: (Int, Int) -> (Int, Int)
 mousePos2fieldPos (x, y) =
@@ -201,22 +207,24 @@ getBlockTypeList = do
 
 appendBlock:: [[BlockObj]] -> ImageSet -> IO [[BlockObj]]
 appendBlock fieldList imageSet =
-    foldM putBlock 0 fieldList
+    mapM (\(x, list) -> putBlock x list) $ zip [0..] fieldList
     where
       putBlock x list = do
         blocktypelist <- getBlockTypeList
-        createBlockObj x y blocktype imageSet 
-            return $ list ++ (take (fieldBlockMaxY - length list) $ blocktypelist)
+        let len = length list
+        return $
+            map (\(y, b) -> createBlockObj x y b imageSet) $
+            zip [len..] (take (fieldBlockMaxY - len) $ blocktypelist)
 
 eraseBlock:: [[BlockObj]] -> [[BlockObj]]
-eraseBlock fieldList x y =
-  foldl (\fl (x, y) -> unsetBlock fl x y) fieldList getEraseList  
+eraseBlock fieldList =
+  map (filter (/= nullBlockObj)) $
+    foldl (\fl (x, y) -> setBlock fl x y nullBlockObj) fieldList getEraseList
   where
     getEraseList:: [(Int, Int)]
-    getEraseList = 
-      sort $ uniq $ 
-          foldl (\el pos -> baseblock pos el) []
-          [(x,y) | x<-[1..fieldBlockMaxX], y<-[1..fieldBlockMaxY]]
+    getEraseList =
+      nub $ foldl (\el pos -> baseblock pos el) []
+          　　　[(x,y) | x<-[1..fieldBlockMaxX], y<-[1..fieldBlockMaxY]]
 
     baseblock:: (Int, Int) -> [(Int, Int)] -> [(Int, Int)]
     baseblock pos eraselist =
@@ -248,19 +256,19 @@ sameBlockNum fieldList x y dx dy =
       getBlock:: [[BlockObj]] -> Int -> Int -> BlockType
       getBlock fieldList x y
         | 0<=x && x<fieldBlockMaxX &&
-          0<=y && y<fieldBlockMaxY = 
+          0<=y && y<fieldBlockMaxY =
             blocktype (fieldList !! x !! y)
-        | otherwise = 
+        | otherwise =
             BlockGuard
 
-setBlock:: [[BlockType]] -> Int -> Int -> BlockType -> [[BlockType]]
+setBlock:: [[BlockObj]] -> Int -> Int -> BlockObj -> [[BlockObj]]
 setBlock fieldList x y block =
   replaceItem x fieldList (replaceItem y (fieldList!!x) block)
-  
-unsetBlock:: [[BlockObj]] -> Int -> Int -> [[BlockObj]]
-unsetBlock fieldList x y 
-  replaceItem x fieldList (removeItem y (fieldList!!x))
- 
+
+--unsetBlock:: [[BlockObj]] -> Int -> Int -> [[BlockObj]]
+--unsetBlock fieldList x y
+--  replaceItem x fieldList (removeItem y (fieldList!!x))
+
 
 
 
