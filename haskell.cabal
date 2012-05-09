@@ -1,0 +1,25 @@
+name: haskell
+version: 0.0.1
+cabal-version: >=1.2
+build-type: Simple
+license: AllRightsReserved
+license-file: ""
+synopsis: test
+data-dir: ""
+ 
+executable haskell
+    build-depends: random -any, GLUT -any, QuickCheck -any, SDL -any,
+                   SDL-image -any, base -any
+    main-is: Main.hs
+    buildable: True
+    hs-source-dirs: src
+    other-modules: Util
+ 
+test-suite test-haskell
+    build-depends: GLUT -any, QuickCheck -any, SDL -any,
+                   SDL-image -any, base -any
+    type: exitcode-stdio-1.0
+    main-is: Main.hs
+    buildable: True
+    cpp-options: -DMAIN_FUNCTION=testMain
+    hs-source-dirs: src
