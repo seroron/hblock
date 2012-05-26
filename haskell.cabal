@@ -13,7 +13,7 @@ executable haskell
     main-is: Main.hs
     buildable: True
     hs-source-dirs: src
-    other-modules: Util
+    other-modules: Fps Util
  
 test-suite test-haskell
     build-depends: GLUT -any, QuickCheck -any, SDL -any,
