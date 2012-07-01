@@ -17,13 +17,17 @@ import System.Random as Random
 import Graphics.UI.SDL as SDL
 import Data.List
 import Data.Word
+import Control.Monad
 
 import Util
 import Fps
 
+fieldLeft = 25
+fieldTop  = 30
+
 fieldBlockMaxX =10
 fieldBlockMaxY =10
-fieldBlockSize =32
+fieldBlockSize =38
 systemFPSTime  = 1000/30
 
 data ImageSet = ImageSet {
@@ -32,7 +36,8 @@ data ImageSet = ImageSet {
     blockC :: Surface,
     blockG :: Surface,
     frame  :: Surface,
-    numbers :: Surface
+    numbers :: Surface,
+    backGround :: Surface
 }
 
 data ImageObj = ImageObj {
@@ -82,13 +87,14 @@ main = do
     SDL.quit
 
 loadImages = do
-    blockA <- SDL.loadBMP "img/a.bmp"
-    blockB <- SDL.loadBMP "img/b.bmp"
-    blockC <- SDL.loadBMP "img/c.bmp"
-    blockG <- SDL.loadBMP "img/g.bmp"
+    blockA <- SDL.loadBMP "img/blue.bmp"
+    blockB <- SDL.loadBMP "img/yellow.bmp"
+    blockC <- SDL.loadBMP "img/purple.bmp"
+    blockG <- SDL.loadBMP "img/green.bmp"
     frame  <- SDL.loadBMP "img/rotate_frame.bmp"
     numbers <- SDL.loadBMP "img/number.bmp"
-    return (ImageSet blockA blockB blockC blockG frame numbers)
+    backGround <- SDL.loadBMP "img/background.bmp"
+    return (ImageSet blockA blockB blockC blockG frame numbers backGround)
 
 --mainLoop:: GameState -> GameInfo -> [[BlockObj]] -> ImageSet -> IO()
 --mainLoop prevTime gamestate gameInfo fieldList imageSet = do
@@ -200,18 +206,15 @@ renderFrame:: Float -> (GameState, GameInfo, [[BlockObj]], ImageSet)
                -> IO (GameState, GameInfo, [[BlockObj]], ImageSet)
 renderFrame fps (gameState, gameInfo, fieldList, imageSet) = do
   mainSurf <- SDL.getVideoSurface
-  SDL.fillRect mainSurf
-        (Just (Rect 0 0
-                (SDL.surfaceGetWidth mainSurf)
-                (SDL.surfaceGetHeight mainSurf)))
-        (SDL.Pixel 0x00000000)
+  SDL.blitSurface (backGround imageSet) Nothing mainSurf (Just (Rect 0 0 640 320))
   renderFiled fieldList mainSurf
 
   (mouseX, mouseY, mouseBtn) <- getMouseState
   let (px, py) = mousePos2fieldPos (mouseX, mouseY)
   SDL.setColorKey (frame imageSet) [SrcColorKey, RLEAccel] (SDL.Pixel 0x00000000)
   SDL.blitSurface (frame imageSet) Nothing mainSurf
-        (Just (Rect (defaultBlockImgPosX px) (defaultBlockImgPosY py) 64 32))
+        (Just (Rect (defaultBlockImgPosX px) (defaultBlockImgPosY py)
+                    (fieldBlockSize*2) fieldBlockSize))
 
   renderNumer imageSet 620 100 (score gameInfo)
   renderNumer imageSet 620 200 (chain gameInfo)
@@ -232,11 +235,12 @@ renderNumer imageSet x y num = do
             px /= x = return ()
         renderNumer' px n mainSurf = do
             let m = n `mod` 10
+            SDL.setColorKey (numbers imageSet) [SrcColorKey, RLEAccel] (SDL.Pixel 0x00000000)
             SDL.blitSurface (numbers imageSet)
-                (Just (Rect (fromInteger $ 22*m) 0 22 50))
+                (Just (Rect (fromInteger $ 28*m) 0 28 50))
                 mainSurf
-                (Just (Rect px y 22 50))
-            renderNumer' (px-22) (n `div` 10) mainSurf
+                (Just (Rect px y 28 50))
+            renderNumer' (px-28) (n `div` 10) mainSurf
 
 createBlockObj:: Int -> Int -> BlockType -> ImageSet -> BlockObj
 createBlockObj x y blocktype imageset =
@@ -248,7 +252,7 @@ createBlockObj x y blocktype imageset =
 
     imageobj = ImageObj (fromIntegral $ defaultBlockImgPosX x)
                         (fromIntegral $ defaultBlockImgPosY y)
-                        32 32 255 image
+                        fieldBlockSize fieldBlockSize 255 image
   in
     BlockObj BS_Stay blocktype imageobj
 
@@ -301,10 +305,11 @@ initField imageset = do
 
 renderFiled:: [[BlockObj]] -> Surface -> IO()
 renderFiled fieldList mainSurf =
-  mapM_ (\b -> render (imageObj b)) $ foldl (++) [] fieldList
+  mapM_ (\b -> render (imageObj b)) $ join fieldList
   where
     render:: ImageObj -> IO Bool
     render imageobj = do
+      SDL.setColorKey (image imageobj) [SrcColorKey, RLEAccel] (SDL.Pixel 0x00000000)
       SDL.setAlpha (image imageobj) [SrcAlpha] (alpha imageobj)
       SDL.blitSurface (image imageobj) Nothing mainSurf
         (Just (Rect (floor $ x imageobj) (floor $ y imageobj)
@@ -312,8 +317,12 @@ renderFiled fieldList mainSurf =
 
 mousePos2fieldPos:: (Int, Int) -> (Int, Int)
 mousePos2fieldPos (x, y) =
-    (min (fieldBlockMaxX-2) (devint x 32),
-     max 0                  (fieldBlockMaxY - (devint y 32)-1))
+    let
+        x' = x - fieldLeft
+        y' = y - fieldTop
+    in
+        (min (fieldBlockMaxX-2) (devint x' fieldBlockSize),
+         max 0                  (fieldBlockMaxY - (devint y' fieldBlockSize)-1))
     where
         devint a b =
             floor $ (fromIntegral (a :: Int)) / (fromIntegral (b :: Int))
@@ -549,11 +558,11 @@ setBlockImgPosY imgy obj =
 
 defaultBlockImgPosX:: Int -> Int
 defaultBlockImgPosX px =
-    px*32
+    px*fieldBlockSize + fieldLeft
 
 defaultBlockImgPosY:: Int -> Int
 defaultBlockImgPosY py =
-    (fieldBlockMaxY-py-1)*32
+    (fieldBlockMaxY-py-1)*fieldBlockSize + fieldTop
 
 --setBlockImgPos:: BlockObj -> BlockObj
 --setBlockImgPos obj =
