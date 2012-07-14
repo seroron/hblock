@@ -36,13 +36,14 @@ data ImageSet = ImageSet {
     blockC :: Surface,
     blockG :: Surface,
     frame  :: Surface,
-    numbers :: Surface,
-    backGround :: Surface
+    numbers :: [Surface],
+    backGround :: Surface,
+    timeArrow :: Surface
 }
 
 data ImageObj = ImageObj {
-  x :: Float,
-  y :: Float,
+  px :: Float,
+  py :: Float,
   width :: Int,
   height :: Int,
   alpha :: Word8,
@@ -86,15 +87,17 @@ main = do
             (GS_Removing, gameInfo, fieldList, imageSet)
     SDL.quit
 
+loadImages:: IO ImageSet
 loadImages = do
     blockA <- SDL.loadBMP "img/blue.bmp"
     blockB <- SDL.loadBMP "img/yellow.bmp"
     blockC <- SDL.loadBMP "img/purple.bmp"
     blockG <- SDL.loadBMP "img/green.bmp"
     frame  <- SDL.loadBMP "img/rotate_frame.bmp"
-    numbers <- SDL.loadBMP "img/number.bmp"
+    numbers <- mapM SDL.loadBMP ["img/n" ++ (show a) ++ ".bmp" | a <- [0..9]]
     backGround <- SDL.loadBMP "img/background.bmp"
-    return (ImageSet blockA blockB blockC blockG frame numbers backGround)
+    timeArrow <- SDL.loadBMP "img/timearrow.bmp"
+    return (ImageSet blockA blockB blockC blockG frame numbers backGround timeArrow)
 
 --mainLoop:: GameState -> GameInfo -> [[BlockObj]] -> ImageSet -> IO()
 --mainLoop prevTime gamestate gameInfo fieldList imageSet = do
@@ -127,6 +130,7 @@ loadImages = do
 --            | otherwise =
 --                return (gamestate, gameInfo, fieldList)
 
+checkEvent:: Event -> Bool
 checkEvent (KeyUp (Keysym SDLK_ESCAPE _ _)) = False
 checkEvent Quit                             = False
 checkEvent _                                = True
@@ -221,27 +225,34 @@ renderFrame fps (gameState, gameInfo, fieldList, imageSet) = do
 
   renderNumer imageSet 620 430 $ floor fps
 
+  renderTimeArrow imageSet gameInfo
+
   SDL.flip mainSurf
   return (gameState, gameInfo, fieldList, imageSet)
 
 renderNumer:: ImageSet -> Int -> Int -> Integer -> IO()
-renderNumer imageSet x y num = do
-    mainSurf <- SDL.getVideoSurface
-    renderNumer' x num mainSurf
-    return ()
+renderNumer imageSet x y num = 
+  SDL.getVideoSurface >>= renderNumer' (x-28) num  
     where
-        renderNumer':: Int -> Integer -> Surface -> IO()
-        renderNumer' px 0 _ |
-            px /= x = return ()
-        renderNumer' px n mainSurf = do
-            let m = n `mod` 10
-            SDL.setColorKey (numbers imageSet) [SrcColorKey, RLEAccel] (SDL.Pixel 0x00000000)
-            SDL.blitSurface (numbers imageSet)
-                (Just (Rect (fromInteger $ 28*m) 0 28 50))
-                mainSurf
-                (Just (Rect px y 28 50))
-            renderNumer' (px-28) (n `div` 10) mainSurf
+      renderNumer':: Int -> Integer -> Surface -> IO()
+      renderNumer' px n mainSurf = do
+        let m = fromInteger $ n `mod` 10
+        SDL.setColorKey ((numbers imageSet)!!m) [SrcColorKey, RLEAccel] (SDL.Pixel 0x00000000)
+        SDL.blitSurface ((numbers imageSet)!!m)
+               Nothing mainSurf (Just (Rect px y 28 50))
+        if n < 10 then return ()
+                  else renderNumer' (px-28) (n `div` 10) mainSurf
 
+renderTimeArrow:: ImageSet -> GameInfo -> IO()
+renderTimeArrow imageSet gameInfo = do
+  mainSurf <- SDL.getVideoSurface
+  SDL.setColorKey (timeArrow imageSet) [SrcColorKey, RLEAccel] (SDL.Pixel 0x00000000)
+  mapM_ (render mainSurf) [110+(x*36) | x<-[0..10]]
+  where
+    render mainSurf x =
+        SDL.blitSurface (timeArrow imageSet) Nothing mainSurf
+               (Just (Rect x 436 36 36))
+    
 createBlockObj:: Int -> Int -> BlockType -> ImageSet -> BlockObj
 createBlockObj x y blocktype imageset =
   let
@@ -312,7 +323,7 @@ renderFiled fieldList mainSurf =
       SDL.setColorKey (image imageobj) [SrcColorKey, RLEAccel] (SDL.Pixel 0x00000000)
       SDL.setAlpha (image imageobj) [SrcAlpha] (alpha imageobj)
       SDL.blitSurface (image imageobj) Nothing mainSurf
-        (Just (Rect (floor $ x imageobj) (floor $ y imageobj)
+        (Just (Rect (floor $ px imageobj) (floor $ py imageobj)
                     (width imageobj) (height imageobj)))
 
 mousePos2fieldPos:: (Int, Int) -> (Int, Int)
@@ -354,9 +365,9 @@ setDropState:: [[BlockObj]] -> [[BlockObj]]
 setDropState =
     mapFieldObj setDropState'
     where
-        setDropState' px py obj
+        setDropState' x y obj
             | (state obj) == BS_Stay
-                && (floor $ y $ imageObj obj) < defaultBlockImgPosY py =
+                && (floor $ py $ imageObj obj) < defaultBlockImgPosY y =
                 obj {state = BS_Dropping}
             | otherwise =
                 obj
@@ -368,15 +379,15 @@ dropBlock fieldList = do
     let nextState  = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList'
     return (nextState, fieldList')
     where
-        dropBlock' px py obj
+        dropBlock' x y obj
             | (state obj) == BS_Dropping =
                 let
-                    imgY = y $ imageObj obj
-                    defaultY = fromIntegral $ defaultBlockImgPosY py
+                    imgY = py $ imageObj obj
+                    defaultY = fromIntegral $ defaultBlockImgPosY y
                 in
                     if imgY+6 <= defaultY then setBlockImgPosY (imgY+6) obj
                                           else obj {state = BS_Stay,
-                                                 imageObj = (imageObj obj){y = defaultY}}
+                                                 imageObj = (imageObj obj){py = defaultY}}
             | otherwise =
                 obj
 
@@ -404,21 +415,21 @@ rotateBlock fieldList = do
     let nextState  = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList'
     return (nextState, fieldList')
     where
-        rotateBlock' px py obj
+        rotateBlock' x y obj
             | (state obj) == BS_RotateRight =
                 let
-                    imgX = x $ imageObj obj
-                    defaultX = fromIntegral $ defaultBlockImgPosX px
+                    imgX = px $ imageObj obj
+                    defaultX = fromIntegral $ defaultBlockImgPosX x
                 in
-                    if imgX+6 <= defaultX then obj {imageObj = ((imageObj obj){x = (imgX+6)})}
-                    else                       obj {imageObj = ((imageObj obj){x = defaultX}), state = BS_Stay}
+                    if imgX+6 <= defaultX then obj {imageObj = ((imageObj obj){px = (imgX+6)})}
+                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), state = BS_Stay}
             | (state obj) == BS_RotateLeft =
                 let
-                    imgX = x $ imageObj obj
-                    defaultX = fromIntegral $ defaultBlockImgPosX px
+                    imgX = px $ imageObj obj
+                    defaultX = fromIntegral $ defaultBlockImgPosX x
                 in
-                    if imgX-6 >= defaultX then obj {imageObj = ((imageObj obj){x = (imgX-6)})}
-                    else                       obj {imageObj = ((imageObj obj){x = defaultX}), state = BS_Stay}
+                    if imgX-6 >= defaultX then obj {imageObj = ((imageObj obj){px = (imgX-6)})}
+                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), state = BS_Stay}
             | otherwise =
                 obj
 
@@ -532,10 +543,10 @@ anyFieldObj func fieldList =
 
 mapFieldObj:: (Int -> Int -> BlockObj -> BlockObj) -> [[BlockObj]] -> [[BlockObj]]
 mapFieldObj func fieldList =
-    map mapY (zip [0..] fieldList)
+    zipWith mapY [0..] fieldList
     where
-        mapY (x, list) =
-            map (\(y, obj) -> func x y obj) (zip [0..] list)
+        mapY x list =
+            zipWith (\y obj -> func x y obj) [0..] list
 
 foldlFieldObj:: (acc -> Int -> Int -> BlockObj -> acc) -> acc -> [[BlockObj]] -> acc
 foldlFieldObj func acc fieldList =
@@ -553,7 +564,7 @@ mapAccumLFieldObj func acc fieldList =
 
 setBlockImgPosY:: Float -> BlockObj -> BlockObj
 setBlockImgPosY imgy obj =
-    obj {imageObj = (imageObj obj) {y = imgy}}
+    obj {imageObj = (imageObj obj) {py = imgy}}
 
 
 defaultBlockImgPosX:: Int -> Int
