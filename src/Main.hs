@@ -77,15 +77,16 @@ data GameState =
 
 main :: IO ()
 main = do
-    SDL.init [SDL.InitEverything]
-    SDL.setVideoMode 640 480 32 []
-    SDL.setCaption "Video Test!" "video test"
-    imageSet <- loadImages
-    fieldList <- initField imageSet
-    let gameInfo = GameInfo 0 0
-    fpsLoop 33 checkEvent nextFrame renderFrame
-            (GS_Removing, gameInfo, fieldList, imageSet)
-    SDL.quit
+  stdgen <- getStdGen
+  SDL.init [SDL.InitEverything]
+  SDL.setVideoMode 640 480 32 []
+  SDL.setCaption "Video Test!" "video test"
+  imageSet <- loadImages
+  let (fieldList, newgen) = initField imageSet stdgen
+  let gameInfo = GameInfo 0 0
+  fpsLoop 33 checkEvent nextFrame renderFrame
+    (GS_Removing, gameInfo, fieldList, imageSet, newgen)
+  SDL.quit
 
 loadImages:: IO ImageSet
 loadImages = do
@@ -135,30 +136,30 @@ checkEvent (KeyUp (Keysym SDLK_ESCAPE _ _)) = False
 checkEvent Quit                             = False
 checkEvent _                                = True
 
-nextFrame:: (GameState, GameInfo, [[BlockObj]], ImageSet)
-             -> IO(GameState, GameInfo, [[BlockObj]], ImageSet)
-nextFrame (GS_Stay, gameInfo, fieldList, imageSet) = do
+nextFrame:: (GameState, GameInfo, [[BlockObj]], ImageSet, StdGen)
+             -> IO(GameState, GameInfo, [[BlockObj]], ImageSet, StdGen)
+nextFrame (GS_Stay, gameInfo, fieldList, imageSet, stdgen) = do
     (mouseX, mouseY, mouseBtn) <- getMouseState
-    let mouseLeft  = any (\x -> x==ButtonLeft) mouseBtn
+    let mouseLeft  = any (== ButtonLeft) mouseBtn
     nextFrame' mouseLeft mouseX mouseY
     where
         nextFrame' True mouseX mouseY = do
             let (bx, by) = mousePos2fieldPos (mouseX, mouseY)
-            return (GS_Rotating, gameInfo, setRotateState fieldList bx by, imageSet)
+            return (GS_Rotating, gameInfo, setRotateState fieldList bx by, imageSet, stdgen)
         nextFrame' False _ _ =
-            return (GS_Stay, gameInfo, fieldList, imageSet)
+            return (GS_Stay, gameInfo, fieldList, imageSet, stdgen)
 
-nextFrame (GS_Removing, gameInfo, fieldList, imageSet) = do
+nextFrame (GS_Removing, gameInfo, fieldList, imageSet, stdgen) = do
     ret <- removeBlock fieldList
     nextFrame' ret
     where
         nextFrame' (True, list) = do
-            list' <- appendBlock imageSet list
-            return (GS_Dropping, gameInfo, setDropState list', imageSet)
+            let (newgen, list') = appendBlock imageSet stdgen list
+            return (GS_Dropping, gameInfo, setDropState list', imageSet, newgen)
         nextFrame' (False, list) =
-            return (GS_Removing, gameInfo, list, imageSet)
+            return (GS_Removing, gameInfo, list, imageSet, stdgen)
 
-nextFrame (GS_Dropping, gameInfo, fieldList, imageSet) = do
+nextFrame (GS_Dropping, gameInfo, fieldList, imageSet, stdgen) = do
     ret <- dropBlock fieldList
     nextFrame' ret
     where
@@ -166,20 +167,20 @@ nextFrame (GS_Dropping, gameInfo, fieldList, imageSet) = do
             let (eraseNum, list') = setRemoveState list
             if eraseNum>0 then return (GS_Removing,
                                        calcChainAndScore gameInfo eraseNum,
-                                       list', imageSet)
-                          else return (GS_Stay, gameInfo, list', imageSet)
+                                       list', imageSet, stdgen)
+                          else return (GS_Stay, gameInfo, list', imageSet, stdgen)
         nextFrame' (False, list) =
-            return (GS_Dropping, gameInfo, list, imageSet)
+            return (GS_Dropping, gameInfo, list, imageSet, stdgen)
 
-nextFrame (GS_Rotating, gameInfo, fieldList, imageSet) = do
+nextFrame (GS_Rotating, gameInfo, fieldList, imageSet, stdgen) = do
     ret <- rotateBlock fieldList
     nextFrame' ret
     where
         nextFrame' (True, list) = do
             let (eraseNum, list') = setRemoveState list
-            return (GS_Removing, calcChainAndScore gameInfo eraseNum, list', imageSet)
+            return (GS_Removing, calcChainAndScore gameInfo eraseNum, list', imageSet, stdgen)
         nextFrame' (False, list) =
-            return (GS_Rotating, gameInfo, list, imageSet)
+            return (GS_Rotating, gameInfo, list, imageSet, stdgen)
 
 calcChainAndScore:: GameInfo -> Int -> GameInfo
 calcChainAndScore gameInfo 0 =
@@ -206,9 +207,9 @@ calcChainAndScore gameInfo eraseNum =
 --            return fieldList
 
 
-renderFrame:: Float -> (GameState, GameInfo, [[BlockObj]], ImageSet)
-               -> IO (GameState, GameInfo, [[BlockObj]], ImageSet)
-renderFrame fps (gameState, gameInfo, fieldList, imageSet) = do
+renderFrame:: Float -> (GameState, GameInfo, [[BlockObj]], ImageSet, StdGen)
+               -> IO (GameState, GameInfo, [[BlockObj]], ImageSet, StdGen)
+renderFrame fps (gameState, gameInfo, fieldList, imageSet, stdgen) = do
   mainSurf <- SDL.getVideoSurface
   SDL.blitSurface (backGround imageSet) Nothing mainSurf (Just (Rect 0 0 640 320))
   renderFiled fieldList mainSurf
@@ -228,7 +229,7 @@ renderFrame fps (gameState, gameInfo, fieldList, imageSet) = do
   renderTimeArrow imageSet gameInfo
 
   SDL.flip mainSurf
-  return (gameState, gameInfo, fieldList, imageSet)
+  return (gameState, gameInfo, fieldList, imageSet, stdgen)
 
 renderNumer:: ImageSet -> Int -> Int -> Integer -> IO()
 renderNumer imageSet x y num = 
@@ -253,6 +254,13 @@ renderTimeArrow imageSet gameInfo = do
         SDL.blitSurface (timeArrow imageSet) Nothing mainSurf
                (Just (Rect x 436 36 36))
     
+createRandomBlockObj:: Int -> Int -> StdGen -> ImageSet -> (BlockObj, StdGen)
+createRandomBlockObj x y stdgen imageset =
+  let
+    (bt, newgen) = nextBlockType stdgen
+  in
+   (createBlockObj x y bt imageset, newgen)
+    
 createBlockObj:: Int -> Int -> BlockType -> ImageSet -> BlockObj
 createBlockObj x y blocktype imageset =
   let
@@ -267,29 +275,17 @@ createBlockObj x y blocktype imageset =
   in
     BlockObj BS_Stay blocktype imageobj
 
-initField:: ImageSet -> IO [[BlockObj]]
-initField imageset = do
-    blocktypelist <- getBlockTypeList
-    return $ splitEvery fieldBlockMaxX $
-          map (\((x, y), blocktype) -> createBlockObj x y blocktype imageset)
-                (zip [(x, y) | x<-[0..(fieldBlockMaxX-1)], y<-[0..(fieldBlockMaxY-1)]]
-                  (take (fieldBlockMaxX*fieldBlockMaxY) $ blocktypelist))
-
-    -- where
-    --     putGuard:: [[BlockType]] -> [[BlockType]]
-    --     putGuard  list = putGuardX $ putGuardY list
-
-    --     putGuardY:: [[BlockType]] -> [[BlockType]]
-    --     putGuardY list =
-    --         map (\x -> (BlockGuard : x ++ [BlockGuard])) list
-
-    --     putGuardX:: [[BlockType]] -> [[BlockType]]
-    --     putGuardX list =
-    --         let
-    --             g = [(replicate (fieldBlockMaxX+2) BlockGuard)]
-    --         in
-    --             g ++ list ++ g
-
+initField:: ImageSet -> StdGen -> ([[BlockObj]], StdGen)
+initField imageset stdgen = 
+  let
+    (btl, newgen) = createBlockTypeList stdgen (fieldBlockMaxX*fieldBlockMaxY)
+  in
+    (splitEvery fieldBlockMaxX $
+          zipWith (\(x, y) blocktype -> createBlockObj x y blocktype imageset)
+                [(x, y) | x<-[0..(fieldBlockMaxX-1)], y<-[0..(fieldBlockMaxY-1)]]
+                btl,
+     newgen)
+  
 
 -- renderFiled:: [[BlockObj]] -> Surface -> ImageSet -> IO()
 -- renderFiled fieldList mainSurf imageSet =
@@ -337,30 +333,47 @@ mousePos2fieldPos (x, y) =
     where
         devint a b =
             floor $ (fromIntegral (a :: Int)) / (fromIntegral (b :: Int))
-
-getBlockTypeList:: IO [BlockType]
-getBlockTypeList = do
-    newStdGen
-    rand <- getStdGen
-    return $ map putBlock $ randomRs (0, 2) rand
+        
+createBlockTypeList:: StdGen -> Int -> ([BlockType], StdGen)
+createBlockTypeList stdgen num = 
+  foldl (\x _ -> createBlockTypeList' x) ([], stdgen) [1..num]
     where
+      createBlockTypeList' (list, gen) =
+        let    
+          (bt, ngen) = nextBlockType gen
+        in
+          (bt:list, ngen)
+      
+                      
+nextBlockType:: StdGen -> (BlockType, StdGen)        
+nextBlockType stdgen =
+  let 
+    (num, newgen) =  randomR (0, 2) stdgen
+  in
+   (putBlock num, newgen)
+  where
         putBlock:: Int -> BlockType
         putBlock 0 =  BlockA
         putBlock 1 =  BlockB
         putBlock 2 =  BlockC
+  
 
-appendBlock:: ImageSet -> [[BlockObj]] ->  IO [[BlockObj]]
-appendBlock imageSet fieldList =
-    mapM (\(x, list) -> putBlock x list) $ zip [0..] fieldList
-    where
-      putBlock x list = do
-        blocktypelist <- getBlockTypeList
-        let len = length list
-        return $
-            list ++ (
-            map (\(y, b) -> createBlockObj x (fieldBlockMaxY + y-len) b imageSet) $
-            zip [len..] (take (fieldBlockMaxY - len) $ blocktypelist))
-
+appendBlock:: ImageSet -> StdGen -> [[BlockObj]] -> (StdGen, [[BlockObj]])
+appendBlock imageSet stdgen fieldList =
+  let
+    ((_, g), fieldList') = mapAccumL putBlock (0, stdgen) fieldList
+  in
+   (g, fieldList')
+  where
+    putBlock (x, gen) list = 
+      let 
+        len = length list
+        newblocknum = fieldBlockMaxY - len
+        (btl, newgen) = createBlockTypeList gen newblocknum
+      in
+       ((x+1, newgen),
+        list ++ zipWith (\y b -> createBlockObj x (newblocknum + y) b imageSet) [len..] btl)
+  
 setDropState:: [[BlockObj]] -> [[BlockObj]]
 setDropState =
     mapFieldObj setDropState'
