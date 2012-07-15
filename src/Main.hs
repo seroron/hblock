@@ -30,6 +30,8 @@ fieldBlockMaxY =10
 fieldBlockSize =38
 systemFPSTime  = 1000/30
 
+initLifeTime = 300
+
 data ImageSet = ImageSet {
     blockA :: Surface,
     blockB :: Surface,
@@ -65,8 +67,9 @@ data BlockObj = BlockObj {
 }
 
 data GameInfo = GameInfo {
-    score :: Integer,
-    chain :: Integer
+    score    :: Integer,
+    chain    :: Integer,
+    lifetime :: Integer
 }
 
 data GameState =
@@ -83,7 +86,7 @@ main = do
   SDL.setCaption "Video Test!" "video test"
   imageSet <- loadImages
   let (fieldList, newgen) = initField imageSet stdgen
-  let gameInfo = GameInfo 0 0
+  let gameInfo = GameInfo 0 0 initLifeTime
   fpsLoop 33 checkEvent nextFrame renderFrame
     (GS_Removing, gameInfo, fieldList, imageSet, newgen)
   SDL.quit
@@ -140,14 +143,17 @@ nextFrame:: (GameState, GameInfo, [[BlockObj]], ImageSet, StdGen)
              -> IO(GameState, GameInfo, [[BlockObj]], ImageSet, StdGen)
 nextFrame (GS_Stay, gameInfo, fieldList, imageSet, stdgen) = do
     (mouseX, mouseY, mouseBtn) <- getMouseState
-    let mouseLeft  = any (== ButtonLeft) mouseBtn
-    nextFrame' mouseLeft mouseX mouseY
+    let mouseLeft = any (== ButtonLeft) mouseBtn
+    let gameInfo' = gameInfo{lifetime = (lifetime gameInfo)-1}
+    return $ nextFrame' mouseLeft gameInfo' mouseX mouseY
     where
-        nextFrame' True mouseX mouseY = do
-            let (bx, by) = mousePos2fieldPos (mouseX, mouseY)
-            return (GS_Rotating, gameInfo, setRotateState fieldList bx by, imageSet, stdgen)
-        nextFrame' False _ _ =
-            return (GS_Stay, gameInfo, fieldList, imageSet, stdgen)
+        nextFrame' True gameinfo mouseX mouseY = 
+            let 
+                (bx, by) = mousePos2fieldPos (mouseX, mouseY)
+            in
+              (GS_Rotating, gameinfo, setRotateState fieldList bx by, imageSet, stdgen)
+        nextFrame' False gameinfo _ _ =
+            (GS_Stay, gameinfo, fieldList, imageSet, stdgen)
 
 nextFrame (GS_Removing, gameInfo, fieldList, imageSet, stdgen) = do
     ret <- removeBlock fieldList
@@ -214,15 +220,13 @@ renderFrame fps (gameState, gameInfo, fieldList, imageSet, stdgen) = do
   SDL.blitSurface (backGround imageSet) Nothing mainSurf (Just (Rect 0 0 640 320))
   renderFiled fieldList mainSurf
 
-  (mouseX, mouseY, mouseBtn) <- getMouseState
-  let (px, py) = mousePos2fieldPos (mouseX, mouseY)
-  SDL.setColorKey (frame imageSet) [SrcColorKey, RLEAccel] (SDL.Pixel 0x00000000)
-  SDL.blitSurface (frame imageSet) Nothing mainSurf
-        (Just (Rect (defaultBlockImgPosX px) (defaultBlockImgPosY py)
-                    (fieldBlockSize*2) fieldBlockSize))
+  renderCursor mainSurf imageSet
 
   renderNumer imageSet 620 100 (score gameInfo)
   renderNumer imageSet 620 200 (chain gameInfo)
+
+  renderNumer imageSet 620 300 (lifetime gameInfo)
+
 
   renderNumer imageSet 620 430 $ floor fps
 
@@ -230,6 +234,15 @@ renderFrame fps (gameState, gameInfo, fieldList, imageSet, stdgen) = do
 
   SDL.flip mainSurf
   return (gameState, gameInfo, fieldList, imageSet, stdgen)
+
+renderCursor:: Surface -> ImageSet -> IO Bool
+renderCursor mainSurf imageSet = do
+  (mouseX, mouseY, mouseBtn) <- getMouseState
+  let (px, py) = mousePos2fieldPos (mouseX, mouseY)
+  SDL.setColorKey (frame imageSet) [SrcColorKey, RLEAccel] (SDL.Pixel 0x00000000)
+  SDL.blitSurface (frame imageSet) Nothing mainSurf
+        (Just (Rect (defaultBlockImgPosX px) (defaultBlockImgPosY py)
+                    (fieldBlockSize*2) fieldBlockSize))
 
 renderNumer:: ImageSet -> Int -> Int -> Integer -> IO()
 renderNumer imageSet x y num = 
@@ -241,8 +254,7 @@ renderNumer imageSet x y num =
         SDL.setColorKey ((numbers imageSet)!!m) [SrcColorKey, RLEAccel] (SDL.Pixel 0x00000000)
         SDL.blitSurface ((numbers imageSet)!!m)
                Nothing mainSurf (Just (Rect px y 28 50))
-        if n < 10 then return ()
-                  else renderNumer' (px-28) (n `div` 10) mainSurf
+        when (n>=10) $ renderNumer' (px-28) (n `div` 10) mainSurf
 
 renderTimeArrow:: ImageSet -> GameInfo -> IO()
 renderTimeArrow imageSet gameInfo = do
@@ -325,14 +337,16 @@ renderFiled fieldList mainSurf =
 mousePos2fieldPos:: (Int, Int) -> (Int, Int)
 mousePos2fieldPos (x, y) =
     let
-        x' = x - fieldLeft
-        y' = y - fieldTop
+        bx = (x-fieldLeft-(fieldBlockSize `devint` 2)) `devint` fieldBlockSize
+        by = fieldBlockMaxY - ((y-fieldTop) `devint` fieldBlockSize) - 1
     in
-        (min (fieldBlockMaxX-2) (devint x' fieldBlockSize),
-         max 0                  (fieldBlockMaxY - (devint y' fieldBlockSize)-1))
+      (minmax 0 bx (fieldBlockMaxX-2),
+       minmax 0 by (fieldBlockMaxY-1)) 
     where
         devint a b =
             floor $ (fromIntegral (a :: Int)) / (fromIntegral (b :: Int))
+        minmax a b c =
+            min (max a b) c
         
 createBlockTypeList:: StdGen -> Int -> ([BlockType], StdGen)
 createBlockTypeList stdgen num = 
@@ -473,20 +487,20 @@ setRemoveState fieldList =
   where
     getEraseList:: [(Int, Int)]
     getEraseList =
-      nub $ foldl (\el pos -> baseblock pos el) []
-          　　　[(x,y) | x<-[0..fieldBlockMaxX], y<-[0..fieldBlockMaxY]]
+      nub $ foldl baseblock []
+              [(x,y) | x<-[0..fieldBlockMaxX], y<-[0..fieldBlockMaxY]]
 
-    baseblock:: (Int, Int) -> [(Int, Int)] -> [(Int, Int)]
-    baseblock pos eraselist =
-      foldl (\el dir -> eraseline pos dir el) eraselist [(1,0), (0,1)]
+    baseblock:: [(Int, Int)] -> (Int, Int) -> [(Int, Int)]
+    baseblock eraselist pos =
+      foldl (eraseline pos) eraselist [(1,0), (0,1)]
 
-    eraseline:: (Int, Int) -> (Int, Int) -> [(Int, Int)] -> [(Int, Int)]
-    eraseline (x, y) (dx, dy) eraselist =
+    eraseline:: (Int, Int) -> [(Int, Int)] -> (Int, Int) -> [(Int, Int)]
+    eraseline (x, y) eraselist (dx, dy) =
       let
         len = sameBlockNum fieldList x y dx dy
       in
        if len >= 4 then
-         foldl (\el n -> ((x+n*dx),(y+n*dy)):el) eraselist [0..len-1]
+         foldl (\el n -> (x+n*dx,y+n*dy):el) eraselist [0..len-1]
        else
          eraselist
 
@@ -579,14 +593,13 @@ setBlockImgPosY:: Float -> BlockObj -> BlockObj
 setBlockImgPosY imgy obj =
     obj {imageObj = (imageObj obj) {py = imgy}}
 
-
 defaultBlockImgPosX:: Int -> Int
-defaultBlockImgPosX px =
-    px*fieldBlockSize + fieldLeft
+defaultBlockImgPosX x =
+    x*fieldBlockSize + fieldLeft
 
 defaultBlockImgPosY:: Int -> Int
-defaultBlockImgPosY py =
-    (fieldBlockMaxY-py-1)*fieldBlockSize + fieldTop
+defaultBlockImgPosY y =
+    (fieldBlockMaxY-y-1)*fieldBlockSize + fieldTop
 
 --setBlockImgPos:: BlockObj -> BlockObj
 --setBlockImgPos obj =

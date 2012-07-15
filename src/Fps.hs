@@ -14,25 +14,22 @@
 
 module Fps where
 
+import Control.Monad
 import Data.Word
 import Graphics.UI.SDL as SDL
 
 fpsLoop:: Word32 -> (Event -> Bool) -> (a -> IO a) -> (Float -> a -> IO a) -> a -> IO()
-fpsLoop systemFPSTime eventFunc moveFunc renderFunc arg = do
+fpsLoop systemFPSTime eventFunc moveFunc renderFunc funcArg = do
     time <- SDL.getTicks
-    fpsLoop' time arg
+    fpsLoop' time funcArg
     where
         fpsLoop' prevTime arg = do
             curTime <- SDL.getTicks
             let loopCnt = curTime - prevTime
-
             (prevTime', arg') <- renderLoop loopCnt prevTime arg
-
             SDL.delay 1
             event <- SDL.pollEvent
-            let ret = eventFunc event
-            if ret==True then fpsLoop' prevTime' arg'
-                         else return ()
+            when (eventFunc event) $ fpsLoop' prevTime' arg'
 
         moveLoop loopCnt prevTime arg
             | loopCnt >= systemFPSTime = do
@@ -48,6 +45,5 @@ fpsLoop systemFPSTime eventFunc moveFunc renderFunc arg = do
                 return (prevTime', arg'')
             | otherwise =
                 return (prevTime, arg)
-
 
 
