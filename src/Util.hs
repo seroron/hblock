@@ -46,3 +46,11 @@ splitAt3 n list =
     in
         (left, x, xs)
 
+divint:: (Integral a, Integral b, Integral c) => a -> b -> c
+divint a b =
+    floor $ (fromIntegral a) / (fromIntegral b)
+
+minmax:: Ord a => a -> a -> a -> a
+minmax a b c =
+    min (max a b) c
+
