@@ -33,37 +33,37 @@ systemFPSTime  = 1000/30
 initLifeTime = 300
 
 data ImageSet = ImageSet {
-    blockA :: Surface,
-    blockB :: Surface,
-    blockC :: Surface,
-    blockG :: Surface,
-    frame  :: Surface,
-    numbers :: [Surface],
-    backGround :: Surface,
-    timeArrow :: Surface
+      blockA :: Surface,
+      blockB :: Surface,
+      blockC :: Surface,
+      blockG :: Surface,
+      frame  :: Surface,
+      numbers :: [Surface],
+      backGround :: Surface,
+      timeArrow :: Surface
 }
 
 data ImageObj = ImageObj {
-  px :: Float,
-  py :: Float,
-  width :: Int,
-  height :: Int,
-  alpha :: Word8,
-  image :: Surface
+      px :: Float,
+      py :: Float,
+      width :: Int,
+      height :: Int,
+      alpha :: Word8,
+      image :: Surface
 }
 
 data BlockType =
-  BlockNone | BlockGuard | BlockA | BlockB | BlockC
-  deriving (Eq, Show)
+    BlockNone | BlockGuard | BlockA | BlockB | BlockC
+    deriving (Eq, Show)
 
 data BlockState =
-  BS_Stay | BS_Dropping | BS_Removing | BS_Removed | BS_RotateRight | BS_RotateLeft
-  deriving (Eq, Show)
+    BS_Stay | BS_Dropping | BS_Removing | BS_Removed | BS_RotateRight | BS_RotateLeft
+    deriving (Eq, Show)
 
 data BlockObj = BlockObj {
-  state :: BlockState,
-  blocktype :: BlockType,
-  imageObj :: ImageObj
+      state :: BlockState,
+      blocktype :: BlockType,
+      imageObj :: ImageObj
 }
 
 data GameInfo = GameInfo {
@@ -75,6 +75,14 @@ data GameInfo = GameInfo {
 
 data GameState =
     GS_Stay | GS_Dropping | GS_Removing | GS_Rotating | GS_GameOver
+
+data GameArgs = GameArgs {
+      gamestate :: GameState,
+      gameinfo  :: GameInfo,
+      field     :: [[BlockObj]],
+      imageset  :: ImageSet,
+      stdgen    ::StdGen
+}
 
 --nullBlockObj =
 --    BlockObj (-1) (-1) BS_Stay BlockNone Nothing
@@ -115,60 +123,53 @@ nextFrame:: (GameState, GameInfo, [[BlockObj]], ImageSet, StdGen)
 nextFrame (GS_Stay, gameInfo, fieldList, imageSet, stdgen) = do
     (mouseX, mouseY, mouseBtn) <- getMouseState
     let mouseLeft = any (== ButtonLeft) mouseBtn
-    return $ nextFrame' mouseLeft mouseX mouseY
-    where
-        nextFrame' True mouseX mouseY = 
+    case mouseLeft of
+      True ->
             let 
                 (bx, by) = mousePos2fieldPos (mouseX, mouseY)
             in
-              (GS_Rotating, 
-               decLifeTime gameInfo 10, 
-               setRotateState fieldList bx by, 
-               imageSet, 
-               stdgen)
-        nextFrame' False _ _ =
-            (GS_Stay, decLifeTime gameInfo 1, fieldList, imageSet, stdgen)
+              return (GS_Rotating, 
+                      decLifeTime gameInfo 10, 
+                      setRotateState fieldList bx by, 
+                      imageSet, 
+                      stdgen)
+      False ->
+            return (GS_Stay, decLifeTime gameInfo 1, fieldList, imageSet, stdgen)
 
-nextFrame (GS_Removing, gameInfo, fieldList, imageSet, stdgen) = do
-    ret <- removeBlock fieldList
-    nextFrame' ret
-    where
-        nextFrame' (True, list) = do
-            let (newgen, list') = appendBlock imageSet stdgen list
-            return (GS_Dropping, gameInfo, setDropState list', imageSet, newgen)
-        nextFrame' (False, list) =
-            return (GS_Removing, gameInfo, list, imageSet, stdgen)
+nextFrame (GS_Removing, gameInfo, fieldList, imageSet, stdgen) =
+    case (removeBlock fieldList) of
+      (True, list) -> do
+          let (newgen, list') = appendBlock imageSet stdgen list
+          return (GS_Dropping, gameInfo, setDropState list', imageSet, newgen)
+      (False, list) ->
+          return (GS_Removing, gameInfo, list, imageSet, stdgen)
 
 nextFrame (GS_Dropping, gameInfo, fieldList, imageSet, stdgen) = do
-    ret <- dropBlock fieldList
-    nextFrame' ret
-    where
-        nextFrame' (True, list) = do
+    case (dropBlock fieldList) of
+      (True, list) -> do
             let (eraseNum, list') = setRemoveState list
             if eraseNum>0 then return (GS_Removing,
                                        addEraseBounus gameInfo eraseNum,
                                        list', imageSet, stdgen)
                           else return (GS_Stay, gameInfo, list', imageSet, stdgen)
-        nextFrame' (False, list) =
-            return (GS_Dropping, gameInfo, list, imageSet, stdgen)
+      (False, list) ->
+          return (GS_Dropping, gameInfo, list, imageSet, stdgen)
 
 nextFrame (GS_Rotating, gameInfo, fieldList, imageSet, stdgen) = do
-  ret <- rotateBlock fieldList
-  return $ nextFrame' ret
-    where
-      nextFrame' (True, list) =
+  case (rotateBlock fieldList) of
+    (True, list) ->
         let 
             (eraseNum, list') = setRemoveState list
         in
-          (GS_Removing, addEraseBounus gameInfo eraseNum, list', imageSet, stdgen)
-      nextFrame' (False, list) =
+          return (GS_Removing, addEraseBounus gameInfo eraseNum, list', imageSet, stdgen)
+    (False, list) ->
           let
               gameInfo' = decLifeTime gameInfo 1
           in
             if lifetime gameInfo' > 0 then
-                (GS_Rotating, gameInfo', list, imageSet, stdgen)
+                return (GS_Rotating, gameInfo', list, imageSet, stdgen)
             else
-                (GS_GameOver, gameInfo', list, imageSet, stdgen)
+                return (GS_GameOver, gameInfo', list, imageSet, stdgen)
 
 nextFrame (GS_GameOver, gameInfo, fieldList, imageSet, stdgen) = do
   return (GS_GameOver, gameInfo, fieldList, imageSet, stdgen)
@@ -375,11 +376,13 @@ setDropState =
                 obj
 
 
-dropBlock:: [[BlockObj]] -> IO (Bool, [[BlockObj]])
-dropBlock fieldList = do
-    let fieldList' = mapFieldObj dropBlock' fieldList
-    let nextState  = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList'
-    return (nextState, fieldList')
+dropBlock:: [[BlockObj]] -> (Bool, [[BlockObj]])
+dropBlock fieldList = 
+    let 
+      fieldList' = mapFieldObj dropBlock' fieldList
+      nextState  = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList'
+    in
+      (nextState, fieldList')
     where
         dropBlock' x y obj
             | (state obj) == BS_Dropping =
@@ -393,12 +396,14 @@ dropBlock fieldList = do
             | otherwise =
                 obj
 
-removeBlock:: [[BlockObj]] -> IO (Bool, [[BlockObj]])
-removeBlock fieldList = do
-    let fieldList'  = mapFieldObj decAplha fieldList
-    let fieldList'' = map (filter (\x -> (state x) /= BS_Removed)) fieldList'
-    let nextState   = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList''
-    return (nextState, fieldList'')
+removeBlock:: [[BlockObj]] -> (Bool, [[BlockObj]])
+removeBlock fieldList =
+    let 
+      fieldList'  = mapFieldObj decAplha fieldList
+      fieldList'' = map (filter (\x -> (state x) /= BS_Removed)) fieldList'
+      nextState   = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList''
+    in
+      (nextState, fieldList'')
     where
         decAplha x y blockobj
             | (state blockobj) == BS_Removing  =
@@ -411,11 +416,13 @@ removeBlock fieldList = do
             | otherwise =
                 blockobj
 
-rotateBlock:: [[BlockObj]] -> IO (Bool, [[BlockObj]])
-rotateBlock fieldList = do
-    let fieldList' = mapFieldObj rotateBlock' fieldList
-    let nextState  = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList'
-    return (nextState, fieldList')
+rotateBlock:: [[BlockObj]] -> (Bool, [[BlockObj]])
+rotateBlock fieldList =
+    let 
+      fieldList' = mapFieldObj rotateBlock' fieldList
+      nextState  = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList'
+    in
+      (nextState, fieldList')
     where
         rotateBlock' x y obj
             | (state obj) == BS_RotateRight =
