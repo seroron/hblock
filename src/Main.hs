@@ -18,6 +18,7 @@ import Graphics.UI.SDL as SDL
 import Data.List
 import Data.Word
 import Control.Monad
+import Control.Monad.State
 
 import Util
 import Fps
@@ -59,7 +60,7 @@ data BlockState =
   deriving (Eq, Show)
 
 data BlockObj = BlockObj {
-  state :: BlockState,
+  blockstate :: BlockState,
   blocktype :: BlockType,
   imageObj :: ImageObj
 }
@@ -71,6 +72,13 @@ data GameInfo = GameInfo {
 
 data GameState =
     GS_Stay | GS_Dropping | GS_Removing | GS_Rotating
+
+data GameArgs = GameArgs {
+  gameInfo :: GameInfo,
+  fieldBlock :: [[BlockObj]], 
+  imageSet :: ImageSet, 
+  stdgen :: StdGen
+}
 
 --nullBlockObj =
 --    BlockObj (-1) (-1) BS_Stay BlockNone Nothing
@@ -254,12 +262,11 @@ renderTimeArrow imageSet gameInfo = do
         SDL.blitSurface (timeArrow imageSet) Nothing mainSurf
                (Just (Rect x 436 36 36))
     
-createRandomBlockObj:: Int -> Int -> StdGen -> ImageSet -> (BlockObj, StdGen)
-createRandomBlockObj x y stdgen imageset =
-  let
-    (bt, newgen) = nextBlockType stdgen
-  in
-   (createBlockObj x y bt imageset, newgen)
+createRandomBlockObj:: Int -> Int -> State GameArgs BlockObj
+createRandomBlockObj x y = do
+  bt <- nextBlockType
+  imageset <- liftM imageSet $ get
+  return $ createBlockObj x y bt imageset
     
 createBlockObj:: Int -> Int -> BlockType -> ImageSet -> BlockObj
 createBlockObj x y blocktype imageset =
@@ -334,23 +341,17 @@ mousePos2fieldPos (x, y) =
         devint a b =
             floor $ (fromIntegral (a :: Int)) / (fromIntegral (b :: Int))
         
-createBlockTypeList:: StdGen -> Int -> ([BlockType], StdGen)
-createBlockTypeList stdgen num = 
-  foldl (\x _ -> createBlockTypeList' x) ([], stdgen) [1..num]
-    where
-      createBlockTypeList' (list, gen) =
-        let    
-          (bt, ngen) = nextBlockType gen
-        in
-          (bt:list, ngen)
-      
+createBlockTypeList:: Int -> State GameArgs [BlockType]
+createBlockTypeList num = do 
+  mapM (\_ -> nextBlockType) [1..num]      
                       
-nextBlockType:: StdGen -> (BlockType, StdGen)        
-nextBlockType stdgen =
-  let 
-    (num, newgen) =  randomR (0, 2) stdgen
-  in
-   (putBlock num, newgen)
+nextBlockType:: State GameArgs BlockType
+nextBlockType = do
+  gameargs <- get
+  let gen =  stdgen gameargs
+  let (num, newgen) =  randomR (0, 2) gen
+  put $ gameargs{stdgen = newgen}
+  return $ putBlock num  
   where
         putBlock:: Int -> BlockType
         putBlock 0 =  BlockA
@@ -358,30 +359,25 @@ nextBlockType stdgen =
         putBlock 2 =  BlockC
   
 
-appendBlock:: ImageSet -> StdGen -> [[BlockObj]] -> (StdGen, [[BlockObj]])
-appendBlock imageSet stdgen fieldList =
-  let
-    ((_, g), fieldList') = mapAccumL putBlock (0, stdgen) fieldList
-  in
-   (g, fieldList')
+appendBlock:: State GameArgs ()
+appendBlock = do
+  gameargs <- get
+  fieldList <- zipWithM putBlock (fieldBlock gameargs) [0..]
+  put gameargs{fieldBlock = fieldList}
+  return ()
   where
-    putBlock (x, gen) list = 
-      let 
-        len = length list
-        newblocknum = fieldBlockMaxY - len
-        (btl, newgen) = createBlockTypeList gen newblocknum
-      in
-       ((x+1, newgen),
-        list ++ zipWith (\y b -> createBlockObj x (newblocknum + y) b imageSet) [len..] btl)
+    putBlock list x = do
+      al <- mapM (createRandomBlockObj x) [(length list)..fieldBlockMaxY]
+      return $ list ++ al
   
 setDropState:: [[BlockObj]] -> [[BlockObj]]
 setDropState =
     mapFieldObj setDropState'
     where
         setDropState' x y obj
-            | (state obj) == BS_Stay
+            | (blockstate obj) == BS_Stay
                 && (floor $ py $ imageObj obj) < defaultBlockImgPosY y =
-                obj {state = BS_Dropping}
+                obj {blockstate = BS_Dropping}
             | otherwise =
                 obj
 
@@ -389,11 +385,11 @@ setDropState =
 dropBlock:: [[BlockObj]] -> IO (Bool, [[BlockObj]])
 dropBlock fieldList = do
     let fieldList' = mapFieldObj dropBlock' fieldList
-    let nextState  = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList'
+    let nextState  = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldList'
     return (nextState, fieldList')
     where
         dropBlock' x y obj
-            | (state obj) == BS_Dropping =
+            | (blockstate obj) == BS_Dropping =
                 let
                     imgY = py $ imageObj obj
                     defaultY = fromIntegral $ defaultBlockImgPosY y
@@ -407,17 +403,17 @@ dropBlock fieldList = do
 removeBlock:: [[BlockObj]] -> IO (Bool, [[BlockObj]])
 removeBlock fieldList = do
     let fieldList'  = mapFieldObj decAplha fieldList
-    let fieldList'' = map (filter (\x -> (state x) /= BS_Removed)) fieldList'
-    let nextState   = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList''
+    let fieldList'' = map (filter (\x -> (blockstate x) /= BS_Removed)) fieldList'
+    let nextState   = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldList''
     return (nextState, fieldList'')
     where
         decAplha x y blockobj
-            | (state blockobj) == BS_Removing  =
+            | (blockstate blockobj) == BS_Removing  =
                 let
                     a = alpha $ imageObj blockobj
                 in
                     if a >= 10 then blockobj {imageObj = ((imageObj blockobj){alpha = (a-10)})}
-                    else            blockobj {imageObj = ((imageObj blockobj){alpha = 0}), state = BS_Removed}
+                    else            blockobj {imageObj = ((imageObj blockobj){alpha = 0}), blockstate = BS_Removed}
 
             | otherwise =
                 blockobj
@@ -425,32 +421,32 @@ removeBlock fieldList = do
 rotateBlock:: [[BlockObj]] -> IO (Bool, [[BlockObj]])
 rotateBlock fieldList = do
     let fieldList' = mapFieldObj rotateBlock' fieldList
-    let nextState  = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList'
+    let nextState  = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldList'
     return (nextState, fieldList')
     where
         rotateBlock' x y obj
-            | (state obj) == BS_RotateRight =
+            | (blockstate obj) == BS_RotateRight =
                 let
                     imgX = px $ imageObj obj
                     defaultX = fromIntegral $ defaultBlockImgPosX x
                 in
                     if imgX+6 <= defaultX then obj {imageObj = ((imageObj obj){px = (imgX+6)})}
-                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), state = BS_Stay}
-            | (state obj) == BS_RotateLeft =
+                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), blockstate = BS_Stay}
+            | (blockstate obj) == BS_RotateLeft =
                 let
                     imgX = px $ imageObj obj
                     defaultX = fromIntegral $ defaultBlockImgPosX x
                 in
                     if imgX-6 >= defaultX then obj {imageObj = ((imageObj obj){px = (imgX-6)})}
-                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), state = BS_Stay}
+                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), blockstate = BS_Stay}
             | otherwise =
                 obj
 
 setRotateState:: [[BlockObj]] -> Int -> Int -> [[BlockObj]]
 setRotateState fieldList x y =
     swapBlock x y (x+1) y $
-        changeBlock  x    y (\obj -> obj{state = BS_RotateRight}) $
-        changeBlock (x+1) y (\obj -> obj{state = BS_RotateLeft}) fieldList
+        changeBlock  x    y (\obj -> obj{blockstate = BS_RotateRight}) $
+        changeBlock (x+1) y (\obj -> obj{blockstate = BS_RotateLeft}) fieldList
 --    swapBlock (x-1) y x y $
 --        swapBlock x y (x+1) y $
 --        changeBlock (x-1) y (\obj -> obj{state = BS_RotateRight}) $
@@ -466,7 +462,7 @@ setRemoveState:: [[BlockObj]] -> (Int, [[BlockObj]])
 setRemoveState fieldList =
   let
     eraselist  = getEraseList
-    fieldList' = foldl (\fl (x, y) -> changeBlock x y (\f -> f {state = BS_Removing}) fl)
+    fieldList' = foldl (\fl (x, y) -> changeBlock x y (\f -> f {blockstate = BS_Removing}) fl)
                        fieldList eraselist
   in
     (length eraselist, fieldList')
@@ -547,7 +543,7 @@ putFieldStr =
     mapM_ putY
     where
         putY list = do
-            mapM_ (\x -> putStr $ show (state x) ++ " ") list
+            mapM_ (\x -> putStr $ show (blockstate x) ++ " ") list
             putStrLn ""
 
 anyFieldObj:: (BlockObj -> Bool) -> [[BlockObj]] -> Bool
