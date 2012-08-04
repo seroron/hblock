@@ -18,6 +18,7 @@ import Graphics.UI.SDL as SDL
 import Data.List
 import Data.Word
 import Control.Monad
+import Control.Monad.State
 
 import Util
 import Fps
@@ -61,7 +62,7 @@ data BlockState =
     deriving (Eq, Show)
 
 data BlockObj = BlockObj {
-      state :: BlockState,
+      blockstate :: BlockState,
       blocktype :: BlockType,
       imageObj :: ImageObj
 }
@@ -118,11 +119,10 @@ checkEvent Quit                             = False
 checkEvent _                                = True
 
 
-nextFrame:: (GameState, GameInfo, [[BlockObj]], ImageSet, StdGen)
-             -> IO(GameState, GameInfo, [[BlockObj]], ImageSet, StdGen)
-nextFrame (GS_Stay, gameInfo, fieldList, imageSet, stdgen) = do
-    (mouseX, mouseY, mouseBtn) <- getMouseState
-    let mouseLeft = any (== ButtonLeft) mouseBtn
+nextFrame:: State Bool GameArgs
+nextFrame = do
+    --(mouseX, mouseY, mouseBtn) <- getMouseState
+    let mouseLeft = False --any (== ButtonLeft) mouseBtn
     case mouseLeft of
       True ->
             let 
@@ -369,9 +369,9 @@ setDropState =
     mapFieldObj setDropState'
     where
         setDropState' x y obj
-            | (state obj) == BS_Stay
+            | (blockstate obj) == BS_Stay
                 && (floor $ py $ imageObj obj) < defaultBlockImgPosY y =
-                obj {state = BS_Dropping}
+                obj {blockstate = BS_Dropping}
             | otherwise =
                 obj
 
@@ -380,18 +380,18 @@ dropBlock:: [[BlockObj]] -> (Bool, [[BlockObj]])
 dropBlock fieldList = 
     let 
       fieldList' = mapFieldObj dropBlock' fieldList
-      nextState  = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList'
+      nextState  = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldList'
     in
       (nextState, fieldList')
     where
         dropBlock' x y obj
-            | (state obj) == BS_Dropping =
+            | (blockstate obj) == BS_Dropping =
                 let
                     imgY = py $ imageObj obj
                     defaultY = fromIntegral $ defaultBlockImgPosY y
                 in
                     if imgY+6 <= defaultY then setBlockImgPosY (imgY+6) obj
-                                          else obj {state = BS_Stay,
+                                          else obj {blockstate = BS_Stay,
                                                  imageObj = (imageObj obj){py = defaultY}}
             | otherwise =
                 obj
@@ -400,18 +400,18 @@ removeBlock:: [[BlockObj]] -> (Bool, [[BlockObj]])
 removeBlock fieldList =
     let 
       fieldList'  = mapFieldObj decAplha fieldList
-      fieldList'' = map (filter (\x -> (state x) /= BS_Removed)) fieldList'
-      nextState   = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList''
+      fieldList'' = map (filter (\x -> (blockstate x) /= BS_Removed)) fieldList'
+      nextState   = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldList''
     in
       (nextState, fieldList'')
     where
         decAplha x y blockobj
-            | (state blockobj) == BS_Removing  =
+            | (blockstate blockobj) == BS_Removing  =
                 let
                     a = alpha $ imageObj blockobj
                 in
                     if a >= 10 then blockobj {imageObj = ((imageObj blockobj){alpha = (a-10)})}
-                    else            blockobj {imageObj = ((imageObj blockobj){alpha = 0}), state = BS_Removed}
+                    else            blockobj {imageObj = ((imageObj blockobj){alpha = 0}), blockstate = BS_Removed}
 
             | otherwise =
                 blockobj
@@ -420,38 +420,38 @@ rotateBlock:: [[BlockObj]] -> (Bool, [[BlockObj]])
 rotateBlock fieldList =
     let 
       fieldList' = mapFieldObj rotateBlock' fieldList
-      nextState  = anyFieldObj (\obj -> (state obj) == BS_Stay) fieldList'
+      nextState  = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldList'
     in
       (nextState, fieldList')
     where
         rotateBlock' x y obj
-            | (state obj) == BS_RotateRight =
+            | (blockstate obj) == BS_RotateRight =
                 let
                     imgX = px $ imageObj obj
                     defaultX = fromIntegral $ defaultBlockImgPosX x
                 in
                     if imgX+6 <= defaultX then obj {imageObj = ((imageObj obj){px = (imgX+6)})}
-                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), state = BS_Stay}
-            | (state obj) == BS_RotateLeft =
+                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), blockstate = BS_Stay}
+            | (blockstate obj) == BS_RotateLeft =
                 let
                     imgX = px $ imageObj obj
                     defaultX = fromIntegral $ defaultBlockImgPosX x
                 in
                     if imgX-6 >= defaultX then obj {imageObj = ((imageObj obj){px = (imgX-6)})}
-                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), state = BS_Stay}
+                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), blockstate = BS_Stay}
             | otherwise =
                 obj
 
 setRotateState:: [[BlockObj]] -> Int -> Int -> [[BlockObj]]
 setRotateState fieldList x y =
     swapBlock x y (x+1) y $
-        changeBlock  x    y (\obj -> obj{state = BS_RotateRight}) $
-        changeBlock (x+1) y (\obj -> obj{state = BS_RotateLeft}) fieldList
+        changeBlock  x    y (\obj -> obj{blockstate = BS_RotateRight}) $
+        changeBlock (x+1) y (\obj -> obj{blockstate = BS_RotateLeft}) fieldList
 --    swapBlock (x-1) y x y $
 --        swapBlock x y (x+1) y $
---        changeBlock (x-1) y (\obj -> obj{state = BS_RotateRight}) $
---        changeBlock  x    y (\obj -> obj{state = BS_RotateRight}) $
---        changeBlock (x+1) y (\obj -> obj{state = BS_RotateRight}) fieldList
+--        changeBlock (x-1) y (\obj -> obj{blockstate = BS_RotateRight}) $
+--        changeBlock  x    y (\obj -> obj{blockstate = BS_RotateRight}) $
+--        changeBlock (x+1) y (\obj -> obj{blockstate = BS_RotateRight}) fieldList
 --    let
 --        a = getBlock fieldList bx by
 --        b = getBlock fieldList (bx+1) by
@@ -462,7 +462,7 @@ setRemoveState:: [[BlockObj]] -> (Int, [[BlockObj]])
 setRemoveState fieldList =
   let
     eraselist  = getEraseList
-    fieldList' = foldl (\fl (x, y) -> changeBlock x y (\f -> f {state = BS_Removing}) fl)
+    fieldList' = foldl (\fl (x, y) -> changeBlock x y (\f -> f {blockstate = BS_Removing}) fl)
                        fieldList eraselist
   in
     (length eraselist, fieldList')
@@ -538,7 +538,7 @@ unsetBlock:: Int -> Int -> [[BlockObj]] -> [[BlockObj]]
 unsetBlock x y fieldList =
     replaceItem x fieldList (removeItem y (fieldList!!x))
 
-decLifeTime:: GameInfo -> Integer -> GameInfo
+decLifeTime:: Integer -> GameInfo
 decLifeTime gameInfo n =
     gameInfo{lifetime = (lifetime gameInfo) - n}
 
@@ -547,7 +547,7 @@ putFieldStr =
     mapM_ putY
     where
         putY list = do
-            mapM_ (\x -> putStr $ show (state x) ++ " ") list
+            mapM_ (\x -> putStr $ show (blockstate x) ++ " ") list
             putStrLn ""
 
 anyFieldObj:: (BlockObj -> Bool) -> [[BlockObj]] -> Bool
