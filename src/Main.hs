@@ -78,14 +78,6 @@ data GameState =
     GS_Stay | GS_Dropping | GS_Removing | GS_Rotating | GS_GameOver
 
 data GameArgs = GameArgs {
-      gamestate :: GameState,
-      gameinfo  :: GameInfo,
-      field     :: [[BlockObj]],
-      imageset  :: ImageSet,
-      stdgen    ::StdGen
-}
-
-data GameArgs = GameArgs {
   gameInfo :: GameInfo,
   fieldBlock :: [[BlockObj]], 
   imageSet :: ImageSet, 
@@ -125,8 +117,7 @@ checkEvent (KeyUp (Keysym SDLK_ESCAPE _ _)) = False
 checkEvent Quit                             = False
 checkEvent _                                = True
 
-
-nextFrame:: State Bool GameArgs
+nextFrame:: State GameArgs GameState 
 nextFrame = do
     --(mouseX, mouseY, mouseBtn) <- getMouseState
     let mouseLeft = False --any (== ButtonLeft) mouseBtn
