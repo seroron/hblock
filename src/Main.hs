@@ -70,15 +70,17 @@ data BlockObj = BlockObj {
 data GameState =
     GS_Stay | GS_Dropping | GS_Removing | GS_Rotating | GS_GameOver
 
+type FieldBlock = [[BlockObj]]
+
 data GameArgs = GameArgs {
       gameState :: GameState,
       hiScore :: Integer,
       score    :: Integer,
       chain    :: Integer,
       lifeTime :: Integer,
-      fieldBlock :: [[BlockObj]], 
+      fieldBlock :: FieldBlock, 
       imageSet :: ImageSet, 
-      stdgen :: StdGen,
+      stdGen :: StdGen,
       mouseX :: Int, 
       mouseY :: Int, 
       mouseBtn :: [MouseButton]
@@ -94,10 +96,10 @@ main = do
   SDL.setVideoMode 640 480 32 []
   SDL.setCaption "Video Test!" "video test"
   imageSet <- loadImages
-  let (fieldList, newgen) = initField imageSet stdgen
+  let (fieldBlock, newgen) = initField imageSet stdgen
   let gameInfo = GameInfo 0 0 0 initLifeTime
   fpsLoop 33 checkEvent ioFrame nextFrame renderFrame
-    (GS_Removing, gameInfo, fieldList, imageSet, newgen)
+    (GS_Removing, gameInfo, fieldBlock, imageSet, newgen)
   SDL.quit
 
 loadImages:: IO ImageSet
@@ -118,97 +120,85 @@ checkEvent Quit                             = False
 checkEvent _                                = True
 
 ioFrame:: StateT GameArgs IO Bool
-ioFrame = do
+ioFrame gameArgs = do
     (x, y, b) <- getMouseState
     modify (\args -> args{mouseX = x, mouseY = y, mouseBtn = b})
     return True
 
 nextFrame:: State GameArgs GameState 
 nextFrame | (gameState get) == GS_Stay = do
-  args <- get
-  case (any (== ButtonLeft) $ mouseBtn args) of
+  case (any (== ButtonLeft) $ gets mouseBtn) of
       True -> do
-        let (bx, by) = mousePos2fieldPos (mouseX args, mouseY args)
-        setRotateState bx by
+        let (bx, by) = mousePos2fieldPos (gets mouseX, gets mouseY)
+        modify (\x -> x{fieldBlock = setRotateState bx by $ gets fieldBlock})
         decLifeTime 10
       False ->
           ()
   return True
-  where
-    setRotateState:: Int -> Int -> State GameArgs ()
-    setRotateState x y = do
-      let fb = swapBlock x y (x+1) y 
-               $ changeBlock  x    y (\obj -> obj{blockstate = BS_RotateRight})
-               $ changeBlock (x+1) y (\obj -> obj{blockstate = BS_RotateLeft}) 
-               $ fieldBlock get
-      modify (\args -> args{fieldBlock = fb})
---    swapBlock (x-1) y x y $
---        swapBlock x y (x+1) y $
---        changeBlock (x-1) y (\obj -> obj{blockstate = BS_RotateRight}) $
---        changeBlock  x    y (\obj -> obj{blockstate = BS_RotateRight}) $
---        changeBlock (x+1) y (\obj -> obj{blockstate = BS_RotateRight}) fieldList
---    let
---        a = getBlock fieldList bx by
---        b = getBlock fieldList (bx+1) by
---    in
---        setBlock (setBlock fieldList bx by b) (bx+1) by a
-
 
 nextFrame | (gameState get) == GS_Removing = do
-    if removeBlock then appendBlock 
-                          >>= modify (\x -> x{gameState = GS_Dropping})
-                   else ()
-    return True
+  case (removeBlock $ gets fieldBlock) of
+    (True, fb) -> do
+      let (fb', gen) = appendBlock fb 
+      modify (\x -> x{gameState = GS_Dropping,
+                      fieldBlock = fb',
+                      stdGen = gen})
+    (False, fb) ->
+      modify (\x -> x{fieldBlock = fb})
+  return True
 
 nextFrame  | (gameState get) == GS_Dropping = do
-  let fb = dropBlock $ gets fieldBlock
-  case (anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fb) of
-    True ->
+  case (dropBlock $ gets fieldBlock) of
+    (True, fb) ->
         let 
             (eraseNum, fb') = setRemoveState fb
         in
-          if eraseNum>0 then modify (\x -> x{gameState = GS_Removing,
-                                             fieldBlock = fb',
-                                             gameArgs = addEraseBounus eraseNum $ gameArgs x})
-          else modify (\x -> x{gameState = GS_Stay,
-                               fieldBlock = fb'})
-    False ->
+          if eraseNum>0 then do 
+            addEraseBounus eraseNum
+            modify (\x -> x{gameState = GS_Removing,
+                                                fieldBlock = fb'})
+          else 
+            modify (\x -> x{gameState = GS_Stay,
+                            fieldBlock = fb'})
+    (False, fb) ->
         modify (\x -> x{fieldBlock = fb})
   return True
 
-nextFrame (GS_Rotating, gameInfo, fieldList, imageSet, stdgen) = do
-  case (rotateBlock fieldList) of
-    (True, list) ->
+nextFrame  | (gameState get) == GS_Rotating = do
+  case (rotateBlock $ gets fieldBlock) of
+    (True, fb) ->
         let 
-            (eraseNum, list') = setRemoveState list
+            (eraseNum, fb') = setRemoveState fb
         in
-          return (GS_Removing, addEraseBounus gameInfo eraseNum, list', imageSet, stdgen)
-    (False, list) ->
-          let
-              gameInfo' = decLifeTime gameInfo 1
-          in
-            if lifetime gameInfo' > 0 then
-                return (GS_Rotating, gameInfo', list, imageSet, stdgen)
-            else
-                return (GS_GameOver, gameInfo', list, imageSet, stdgen)
+         if eraseNum>0 then do 
+           addEraseBounus eraseNum
+           modify (\x -> x{gameState = GS_Removing,
+                           fieldBlock = fb'})
+          else 
+           modify (\x -> x{gameState = GS_Stay,
+                           fieldBlock = fb'})
+    (False, _) -> do
+      decLifeTime 1
+      when (lifeTime gets > 0) $ modify (\x -> x{gameState = GS_GameOver})
+  return True
 
-nextFrame (GS_GameOver, gameInfo, fieldList, imageSet, stdgen) = do
-  return (GS_GameOver, gameInfo, fieldList, imageSet, stdgen)
+nextFrame  | (gameState get) == GS_GameOver = do
+  return True
 
-addEraseBounus:: Int -> GameArgs -> GameArgs
-addEraseBounus 0 gameArgs =
-    gameArgs{chain = 0}
-addEraseBounus eraseNum gameArgs =
-    gameArgs{chain = (chain gameArgs) + 1,
-             score = (score gameArgs) + (toInteger eraseNum)*10*((chain gameArgs)+1),
-             lifeTime = (lifeTime gameArgs) + (toInteger eraseNum)*((chain gameArgs)+1)}
+addEraseBounus:: Int -> State GameArgs ()
+addEraseBounus 0 =
+    modify (\x -> x{chain = 0})
+addEraseBounus eraseNum =
+    modify (\x -> x{chain = (chain x) + 1,
+                    score = (score x) + (toInteger x)*10*((chain x)+1),
+                    lifeTime = (lifeTime x) + (toInteger eraseNum)*((chain x)+1)})
 
-renderFrame:: Float -> (GameState, GameInfo, [[BlockObj]], ImageSet, StdGen)
-               -> IO (GameState, GameInfo, [[BlockObj]], ImageSet, StdGen)
-renderFrame fps (gameState, gameInfo, fieldList, imageSet, stdgen) = do
+renderFrame:: Float -> (GameState, GameInfo, FieldBlock, ImageSet, StdGen)
+               -> IO (GameState, GameInfo, FieldBlock, ImageSet, StdGen)
+renderFrame fps (gameState, gameInfo, fieldBlock, imageSet, stdgen) = do
   mainSurf <- SDL.getVideoSurface
   SDL.blitSurface (backGround imageSet) Nothing mainSurf (Just (Rect 0 0 640 320))
-  renderFiled fieldList mainSurf
+  renderFiled fieldBlock mainSurf
 
   renderCursor mainSurf imageSet
 
@@ -222,7 +212,7 @@ renderFrame fps (gameState, gameInfo, fieldList, imageSet, stdgen) = do
   renderTimeArrow mainSurf imageSet gameInfo
 
   SDL.flip mainSurf
-  return (gameState, gameInfo, fieldList, imageSet, stdgen)
+  return (gameState, gameInfo, fieldBlock, imageSet, stdgen)
 
 renderCursor:: Surface -> ImageSet -> IO Bool
 renderCursor mainSurf imageSet = do
@@ -268,12 +258,6 @@ renderTimeArrow mainSurf imageSet gameInfo
                (Just (Rect (timeArrowLeft+nx*timeArrowSize) timeArrowTop 
                             timeArrowSize timeArrowSize))
     
-createRandomBlockObj:: Int -> Int -> State GameArgs BlockObj
-createRandomBlockObj x y = do
-  bt <- nextBlockType
-  imageset <- liftM imageSet $ get
-  return $ createBlockObj x y bt imageset
-    
 createBlockObj:: Int -> Int -> BlockType -> ImageSet -> BlockObj
 createBlockObj x y blocktype imageset =
   let
@@ -288,7 +272,7 @@ createBlockObj x y blocktype imageset =
   in
     BlockObj BS_Stay blocktype imageobj
 
-initField:: ImageSet -> StdGen -> ([[BlockObj]], StdGen)
+initField:: ImageSet -> StdGen -> (FieldBlock, StdGen)
 initField imageset stdgen = 
   let
     (btl, newgen) = createBlockTypeList stdgen (fieldBlockMaxX*fieldBlockMaxY)
@@ -300,10 +284,10 @@ initField imageset stdgen =
      newgen)
   
 
--- renderFiled:: [[BlockObj]] -> Surface -> ImageSet -> IO()
--- renderFiled fieldList mainSurf imageSet =
+-- renderFiled:: FieldBlock -> Surface -> ImageSet -> IO()
+-- renderFiled fieldBlock mainSurf imageSet =
 --     do
---         randerListX fieldList
+--         randerListX fieldBlock
 --     where
 --         renderListX list =
 --             mapM_ (\(x, l) -> renderListY x l) $ zip [0,32..] list
@@ -323,9 +307,9 @@ initField imageset stdgen =
 --         blitBlock x y _ =
 --             return True
 
-renderFiled:: [[BlockObj]] -> Surface -> IO()
-renderFiled fieldList mainSurf =
-  mapM_ (\b -> render (imageObj b)) $ join fieldList
+renderFiled:: FieldBlock -> Surface -> IO()
+renderFiled fieldBlock mainSurf =
+  mapM_ (\b -> render (imageObj b)) $ join fieldBlock
   where
     render:: ImageObj -> IO Bool
     render imageobj = do
@@ -350,10 +334,8 @@ createBlockTypeList num = do
                       
 nextBlockType:: State GameArgs BlockType
 nextBlockType = do
-  gameargs <- get
-  let gen =  stdgen gameargs
-  let (num, newgen) =  randomR (0, 2) gen
-  put $ gameargs{stdgen = newgen}
+  let (num, newgen) =  randomR (0, 2) $ gets stdGen
+  modify (\x -> x{stdGen = newgen})
   return $ putBlock num  
   where
         putBlock:: Int -> BlockType
@@ -361,18 +343,31 @@ nextBlockType = do
         putBlock 1 =  BlockB
         putBlock 2 =  BlockC
   
+setRotateState:: Int -> Int -> FieldBlock -> FieldBlock
+setRotateState x y fieldBlock = 
+  swapBlock x y (x+1) y 
+    $ changeBlock  x    y (\obj -> obj{blockstate = BS_RotateRight})
+    $ changeBlock (x+1) y (\obj -> obj{blockstate = BS_RotateLeft}) fieldBlock
 
-appendBlock:: State GameArgs ()
-appendBlock = do
-  fb <- zipWithM putBlock (gets fieldBlock) [0..]
-  modify (\x -> x{fieldBlock = fb})
-  return ()
+appendBlock:: FieldBlock -> StdGen -> (FieldBlock, StdGen)
+appendBlock fieldBlock stdgen = 
+  runState (appendBlock' fieldBlock) stdgen
   where
+    appendBlock':: FieldBlock -> State StdGen FieldBlock
+    appendBlock' fieldBlock = 
+      zipWithM putBlock fieldBlock [0..]
+    
+    putBlock:: [BlockObj] -> Int -> State StdGen [BlockObj]
     putBlock list x = do
       al <- mapM (createRandomBlockObj x) [(length list)..fieldBlockMaxY]
       return $ list ++ al
-  
-setDropState:: [[BlockObj]] -> [[BlockObj]]
+    
+    createRandomBlockObj x y = do
+      bt <- nextBlockType
+      imageset <- liftM imageSet $ get
+      return $ createBlockObj x y bt imageset
+
+setDropState:: FieldBlock -> FieldBlock
 setDropState =
     mapFieldObj setDropState'
     where
@@ -383,10 +378,14 @@ setDropState =
             | otherwise =
                 obj
 
-dropBlock:: [[BlockObj]] -> (Bool, [[BlockObj]])
-dropBlock fieldList = 
-    mapFieldObj dropBlock' fieldList
-    where
+dropBlock:: FieldBlock -> (Bool, FieldBlock)
+dropBlock fieldBlock = 
+  let 
+    fieldBlock' = mapFieldObj dropBlock' fieldBlock
+    nextState   = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldBlock'
+  in
+   (nextState, fieldBlock')
+     where
         dropBlock' x y obj
             | (blockstate obj) == BS_Dropping =
                 let
@@ -399,14 +398,14 @@ dropBlock fieldList =
             | otherwise =
                 obj
 
-removeBlock:: [[BlockObj]] -> (Bool, [[BlockObj]])
-removeBlock fieldList =
+removeBlock:: FieldBlock -> (Bool, FieldBlock)
+removeBlock fieldBlock =
     let 
-      fieldList'  = mapFieldObj decAplha fieldList
-      fieldList'' = map (filter (\x -> (blockstate x) /= BS_Removed)) fieldList'
-      nextState   = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldList''
+      fieldBlock' = map (filter (\x -> (blockstate x) /= BS_Removed)) 
+                      $ mapFieldObj decAplha fieldBlock
+      nextState   = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldBlock'
     in
-      (nextState, fieldList'')
+      (nextState, fieldBlock')
     where
         decAplha x y blockobj
             | (blockstate blockobj) == BS_Removing  =
@@ -419,13 +418,13 @@ removeBlock fieldList =
             | otherwise =
                 blockobj
 
-rotateBlock:: [[BlockObj]] -> (Bool, [[BlockObj]])
-rotateBlock fieldList =
+rotateBlock:: FieldBlock -> (Bool, FieldBlock)
+rotateBlock fieldBlock =
     let 
-      fieldList' = mapFieldObj rotateBlock' fieldList
-      nextState  = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldList'
+      fieldBlock' = mapFieldObj rotateBlock' fieldBlock
+      nextState  = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldBlock'
     in
-      (nextState, fieldList')
+      (nextState, fieldBlock')
     where
         rotateBlock' x y obj
             | (blockstate obj) == BS_RotateRight =
@@ -445,14 +444,14 @@ rotateBlock fieldList =
             | otherwise =
                 obj
 
-setRemoveState:: [[BlockObj]] -> (Int, [[BlockObj]])
-setRemoveState fieldList =
+setRemoveState:: FieldBlock -> (Int, FieldBlock)
+setRemoveState fieldBlock =
   let
     eraselist  = getEraseList
-    fieldList' = foldl (\fl (x, y) -> changeBlock x y (\f -> f {blockstate = BS_Removing}) fl)
-                       fieldList eraselist
+    fieldBlock' = foldl (\fl (x, y) -> changeBlock x y (\f -> f {blockstate = BS_Removing}) fl)
+                       fieldBlock eraselist
   in
-    (length eraselist, fieldList')
+    (length eraselist, fieldBlock')
   where
     getEraseList:: [(Int, Int)]
     getEraseList =
@@ -466,64 +465,64 @@ setRemoveState fieldList =
     eraseline:: (Int, Int) -> [(Int, Int)] -> (Int, Int) -> [(Int, Int)]
     eraseline (x, y) eraselist (dx, dy) =
       let
-        len = sameBlockNum fieldList x y dx dy
+        len = sameBlockNum fieldBlock x y dx dy
       in
        if len >= 4 then
          foldl (\el n -> (x+n*dx,y+n*dy):el) eraselist [0..len-1]
        else
          eraselist
 
-sameBlockNum::  [[BlockObj]] -> Int -> Int -> Int -> Int -> Int
-sameBlockNum fieldList x y dx dy =
-  sameBlockNum' (x+dx) (y+dy) (getBlock fieldList x y)
+sameBlockNum::  FieldBlock -> Int -> Int -> Int -> Int -> Int
+sameBlockNum fieldBlock x y dx dy =
+  sameBlockNum' (x+dx) (y+dy) (getBlock fieldBlock x y)
     where
       sameBlockNum':: Int -> Int -> BlockType -> Int
       sameBlockNum' x' y' b
         | 0<=x && x<fieldBlockMaxX &&
           0<=y && y<fieldBlockMaxY &&
-          b == (getBlock fieldList x' y') =
+          b == (getBlock fieldBlock x' y') =
             sameBlockNum' (x'+dx) (y'+dy) b
         | otherwise =
             (abs (x'-x)) + (abs (y'-y))
 
-      getBlock:: [[BlockObj]] -> Int -> Int -> BlockType
-      getBlock fieldList x y
+      getBlock:: FieldBlock -> Int -> Int -> BlockType
+      getBlock fieldBlock x y
         | 0<=x && x<fieldBlockMaxX &&
           0<=y && y<fieldBlockMaxY =
-            blocktype (fieldList !! x !! y)
+            blocktype (fieldBlock !! x !! y)
         | otherwise =
             BlockGuard
 
-changeBlock:: Int -> Int -> (BlockObj -> BlockObj) -> [[BlockObj]] -> [[BlockObj]]
-changeBlock x y func fieldList =
+changeBlock:: Int -> Int -> (BlockObj -> BlockObj) -> FieldBlock -> FieldBlock
+changeBlock x y func fieldBlock =
     let
-        (left, (item:right)) = splitAt y (fieldList!!x)
+        (left, (item:right)) = splitAt y (fieldBlock!!x)
     in
-        replaceItem x fieldList (left ++ [(func item)] ++ right)
+        replaceItem x fieldBlock (left ++ [(func item)] ++ right)
 
---renumberBlock:: [[BlockObj]]  -> [[BlockObj]]
+--renumberBlock:: FieldBlock  -> FieldBlock
 --renumberBlock =
 --    mapFieldObj (\x y obj -> obj {posX = x, posY = y})
 
-getBlock:: Int -> Int -> [[BlockObj]] -> BlockObj
-getBlock x y fieldList =
-     fieldList!!x!!y
+getBlock:: Int -> Int -> FieldBlock -> BlockObj
+getBlock x y fieldBlock =
+     fieldBlock!!x!!y
 
-setBlock:: Int -> Int -> BlockObj -> [[BlockObj]] -> [[BlockObj]]
-setBlock x y obj fieldList =
-    changeBlock x y (\_ -> obj) fieldList
+setBlock:: Int -> Int -> BlockObj -> FieldBlock -> FieldBlock
+setBlock x y obj fieldBlock =
+    changeBlock x y (\_ -> obj) fieldBlock
 
-swapBlock:: Int -> Int -> Int -> Int -> [[BlockObj]] -> [[BlockObj]]
-swapBlock ax ay bx by fieldList =
+swapBlock:: Int -> Int -> Int -> Int -> FieldBlock -> FieldBlock
+swapBlock ax ay bx by fieldBlock =
     let
-        a = getBlock ax ay fieldList
-        b = getBlock bx by fieldList
+        a = getBlock ax ay fieldBlock
+        b = getBlock bx by fieldBlock
     in
-        setBlock bx by a $ setBlock ax ay b fieldList
+        setBlock bx by a $ setBlock ax ay b fieldBlock
 
-unsetBlock:: Int -> Int -> [[BlockObj]] -> [[BlockObj]]
-unsetBlock x y fieldList =
-    replaceItem x fieldList (removeItem y (fieldList!!x))
+unsetBlock:: Int -> Int -> FieldBlock -> FieldBlock
+unsetBlock x y fieldBlock =
+    replaceItem x fieldBlock (removeItem y (fieldBlock!!x))
 
 decLifeTime:: Int -> State GameArgs ()
 decLifeTime n =
@@ -533,7 +532,7 @@ decLifeTime n =
       if lt > 0 then modify (\args -> args{lifeTime = lt - n})
                 else return ()
 
-putFieldStr:: [[BlockObj]] -> IO()
+putFieldStr:: FieldBlock -> IO()
 putFieldStr =
     mapM_ putY
     where
@@ -541,27 +540,27 @@ putFieldStr =
             mapM_ (\x -> putStr $ show (blockstate x) ++ " ") list
             putStrLn ""
 
-anyFieldObj:: (BlockObj -> Bool) -> [[BlockObj]] -> Bool
-anyFieldObj func fieldList =
-    foldlFieldObj (\a _ _ obj -> a && func obj) True fieldList
+anyFieldObj:: (BlockObj -> Bool) -> FieldBlock -> Bool
+anyFieldObj func fieldBlock =
+    foldlFieldObj (\a _ _ obj -> a && func obj) True fieldBlock
 
-mapFieldObj:: (Int -> Int -> BlockObj -> BlockObj) -> [[BlockObj]] -> [[BlockObj]]
-mapFieldObj func fieldList =
-    zipWith mapY [0..] fieldList
+mapFieldObj:: (Int -> Int -> BlockObj -> BlockObj) -> FieldBlock -> FieldBlock
+mapFieldObj func fieldBlock =
+    zipWith mapY [0..] fieldBlock
     where
         mapY x list =
             zipWith (\y obj -> func x y obj) [0..] list
 
-foldlFieldObj:: (acc -> Int -> Int -> BlockObj -> acc) -> acc -> [[BlockObj]] -> acc
-foldlFieldObj func acc fieldList =
-    foldl foldlY acc (zip [0..] fieldList)
+foldlFieldObj:: (acc -> Int -> Int -> BlockObj -> acc) -> acc -> FieldBlock -> acc
+foldlFieldObj func acc fieldBlock =
+    foldl foldlY acc (zip [0..] fieldBlock)
     where
         foldlY accy (x, list) =
             foldl (\a (y, obj) -> func a x y obj) accy (zip [0..] list)
 
-mapAccumLFieldObj:: (acc -> Int -> Int -> BlockObj -> (acc, BlockObj)) -> acc -> [[BlockObj]] -> (acc, [[BlockObj]])
-mapAccumLFieldObj func acc fieldList =
-    mapAccumL mapAccumLY acc (zip [0..] fieldList)
+mapAccumLFieldObj:: (acc -> Int -> Int -> BlockObj -> (acc, BlockObj)) -> acc -> FieldBlock -> (acc, FieldBlock)
+mapAccumLFieldObj func acc fieldBlock =
+    mapAccumL mapAccumLY acc (zip [0..] fieldBlock)
     where
         mapAccumLY accy (x, list) =
             mapAccumL (\a (y, obj) -> func a x y obj) accy (zip [0..] list)

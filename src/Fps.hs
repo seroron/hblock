@@ -19,41 +19,39 @@ import Control.Monad.State
 import Data.Word
 import Graphics.UI.SDL as SDL
 
-fpsLoop:: Word32 -> (Event -> Bool) -> StateT a IO Bool 
-           -> State a Bool -> (Float -> a -> IO Bool) -> a -> IO ()
+fpsLoop:: Word32 -> (Event -> Bool) -> (a -> IO a) -> 
+            (a -> a) -> (Float -> a -> IO Bool) -> a -> IO ()
 fpsLoop systemFPSTime eventFunc moveIOFunc moveFunc renderFunc funcArg = do
   time <- SDL.getTicks
-  runStateT (fpsLoop' time) funcArg
+  fpsLoop' time funcArg
   return ()
     where
---      fpsLoop':: Word32 -> StateT a IO()  
-      fpsLoop' prevTime = do
-        curTime <- liftIO SDL.getTicks
+--      fpsLoop':: Word32 -> a -> IO()  
+      fpsLoop' prevTime arg = do
+        curTime <- SDL.getTicks
         let loopCnt = curTime - prevTime
-        prevTime' <- renderLoop loopCnt prevTime
-        liftIO $ SDL.delay 1
+        (prevTime', arg') <- renderLoop loopCnt prevTime arg
+        SDL.delay 1
         event <- liftIO SDL.pollEvent
-        when (eventFunc event) $ fpsLoop' prevTime'
+        when (eventFunc event) $ fpsLoop' prevTime' arg'
 
---      moveLoop:: Word32 -> Word32 -> StateT a IO Word32
-      moveLoop loopCnt prevTime
+--      moveLoop:: Word32 -> Word32 -> a -> IO (Word32, a)
+      moveLoop loopCnt prevTime arg
         | loopCnt >= systemFPSTime = do
-          moveIOFunc
-          s <- get
-          put $ execState moveFunc s
-          moveLoop (loopCnt-systemFPSTime) (prevTime+systemFPSTime)
+          arg' <- moveIOFunc arg
+          let arg'' = moveFunc arg'
+          moveLoop (loopCnt-systemFPSTime) (prevTime+systemFPSTime) arg''
         | otherwise =
-          return prevTime
+          return (prevTime, arg)
 
---      renderLoop:: Word32 -> Word32 -> StateT a IO Word32 
-      renderLoop loopCnt prevTime
+--      renderLoop:: Word32 -> Word32 -> b -> IO (Word32, b) 
+      renderLoop loopCnt prevTime arg
         | loopCnt >= systemFPSTime = do
-          prevTime' <- moveLoop loopCnt prevTime
-          arg <- get
-          liftIO $ renderFunc (1000.0 / fromIntegral loopCnt) arg
-          return prevTime'
+          (prevTime', arg') <- moveLoop loopCnt prevTime arg
+          renderFunc (1000.0 / fromIntegral loopCnt) arg'
+          return (prevTime', arg')
         | otherwise =
-          return prevTime
+          return (prevTime, arg)
 
 
 
