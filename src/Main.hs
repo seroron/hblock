@@ -282,7 +282,7 @@ createBlockObj x y blocktype imageset =
   in
     BlockObj BS_Stay blocktype imageobj
 
-createRandomBlockObj:: Int -> Int -> ImageSet -> State StdGen BlockObj
+createRandomBlockObj:: Int -> Int -> ImageSet -> State StdGen BlockType
 createRandomBlockObj x y imageset = do
   bt <- nextBlockType
   return $ createBlockObj x y bt imageset
