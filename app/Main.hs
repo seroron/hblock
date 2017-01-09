@@ -27,12 +27,16 @@ import Debug.Trace
 import Util
 import Fps
 
-fieldLeft = 25
-fieldTop  = 30
 
 fieldBlockMaxX =10
 fieldBlockMaxY =10
 fieldBlockSize =38
+
+fieldLeft = 25
+fieldTop  = 30
+fieldRight = fieldLeft + fieldBlockMaxX*fieldBlockSize
+fieldBottom = fieldTop + fieldBlockMaxY*fieldBlockSize
+                 
 systemFPSTime  = 1000/30
 
 initLifeTime = 30
@@ -44,6 +48,7 @@ timeArrowLeft = 110
 timeArrowSize = 36
 timeArrowUnitLife = 90
 
+                    
 data ImageSet = ImageSet {
       blockA :: Surface,
       blockB :: Surface,
@@ -120,13 +125,34 @@ data GameArgs = GameArgs {
       mouseX :: Int, 
       mouseY :: Int, 
       mouseBtn :: [MouseButton],
-      gameOverObj :: ImageObj
+      gameOverObj :: ImageObj,
+      gameScenes :: [GameScene]
 --      gameObjs :: MultiSet GameObject
 }
 
+data GameScene =
+    GameOverScene {
+      backPlane :: ImageObj
+    }
 
+class GameObject gobj where
+    move :: GameArgs -> gobj -> (GameArgs, gobj)
+    render :: GameArgs -> gobj -> IO (GameArgs, gobj)
+              
+instance GameObject GameScene where
+    move ga gs@GameOverScene{} = (ga, gs)
+    render ga gs@GameOverScene{} = do
+        mainSurf <- SDL.getVideoSurface
+
+        renderGameOver mainSurf (imageSet ga) ga
+
+        return (ga, gs)
+               
 --nullBlockObj =
 --    BlockObj (-1) (-1) BS_Stay BlockNone Nothing
+
+blackImageObj imageset =
+    ImageObj 0 0 640 480 0 (blackBG imageset)
 
 main :: IO ()
 main = do
@@ -149,7 +175,9 @@ main = do
          mouseX     = 0,
          mouseY     = 0,
          mouseBtn   = [],
-         gameOverObj = ImageObj 0 0 640 480 0 (blackBG imageset)}
+         gameOverObj = ImageObj 0 0 640 480 0 (blackBG imageset),
+         gameScenes = []
+       }
   SDL.quit
      
 loadImages:: IO ImageSet
@@ -282,7 +310,7 @@ renderFrame fps gameargs = do
 
   renderTimeArrow mainSurf imageset (lifeTime gameargs)
 
-  renderGameOver mainSurf imageset gameargs
+  mapM_ (\x -> render gameargs x) (gameScenes gameargs)
 
   SDL.flip mainSurf
   return True
@@ -330,6 +358,12 @@ renderTimeArrow mainSurf imageset lifetime
                (Just (Rect (timeArrowLeft+nx*timeArrowSize) timeArrowTop 
                             timeArrowSize timeArrowSize))
 
+renderImage:: Surface -> Surface -> Int -> Int -> Int -> Int -> Word8 -> Data.Word.Word32 -> IO Bool
+renderImage srcSurf dstSurf x y w h a ck = do
+  SDL.setColorKey srcSurf [SrcColorKey, RLEAccel] $ SDL.Pixel ck
+  SDL.setAlpha srcSurf [SrcAlpha] a
+  SDL.blitSurface srcSurf Nothing dstSurf (Just (Rect x y w h))
+
 renderGameOver:: Surface -> ImageSet -> GameArgs -> IO Bool     
 renderGameOver mainSurf imageset gameargs 
     | (gameState gameargs) == GS_GameOver = 
@@ -340,8 +374,9 @@ renderGameOver mainSurf imageset gameargs
         return True
 
     where
-      render =
-          renderImageObj mainSurf (gameOverObj gameargs)
+      render = do
+          renderImageObj mainSurf (gameOverObj gameargs) 
+          renderImage (gameover imageset) mainSurf 0 0 349 57 255 0x00000000
 
 createBlockObj:: Int -> Int -> BlockType -> ImageSet -> BlockObj
 createBlockObj x y blocktype imageset =
@@ -644,7 +679,8 @@ decLifeTime n gameargs =
     in
       if lt > 0 then gameargs{lifeTime = lt}
                 else gameargs{lifeTime  = 0,
-                              gameState = GS_GameOver}
+                              gameState = GS_GameOver,
+                              gameScenes = (GameOverScene{backPlane=blackImageObj (imageSet gameargs)}:(gameScenes gameargs))}
 
 --setBlockImgPos:: BlockObj -> BlockObj
 --setBlockImgPos obj =
@@ -653,13 +689,3 @@ decLifeTime n gameargs =
 --        imgY = 50 + (fieldBlockMaxY-(posY obj))*32
 --    in
 --        obj {imageObj = ((imageObj obj) {x = imgX, y = imgY})}
-
-
-
-
-
-
-
-
-
-
