@@ -14,6 +14,9 @@
 
 module Util where
 
+import Data.List
+import Data.Maybe
+    
 splitEvery:: Int -> [a] -> [[a]]
 splitEvery n list =
     tail $ splitter list [[]]
@@ -53,4 +56,11 @@ divint a b =
 minmax:: Ord a => a -> a -> a -> a
 minmax a b c =
     min (max a b) c
+
+mapAccumFilterR :: (a -> b -> (a, Maybe c)) -> a -> [b] -> (a, [c])
+mapAccumFilterR f a b =
+    let
+        (r1, r2) = Data.List.mapAccumR f a b
+    in
+      (r1, Data.Maybe.catMaybes r2)
 

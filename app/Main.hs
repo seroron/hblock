@@ -23,6 +23,7 @@ import Data.MultiSet (MultiSet)
 import Control.Monad
 import Control.Monad.State
 import Debug.Trace
+import Control.Lens
     
 import Util
 import Fps
@@ -130,24 +131,49 @@ data GameArgs = GameArgs {
 --      gameObjs :: MultiSet GameObject
 }
 
+class GameObject gobj where
+    move ::  gobj -> GameArgs -> (Bool, GameArgs, GameScene)
+    render :: gobj -> GameArgs -> IO Bool
+
 data GameScene =
     GameOverScene {
-      backPlane :: ImageObj
+      _backPlane :: ImageObj,
+      _gos_alpha :: Int
+    } |
+    RetryScene {
+      _cnt :: Int
     }
 
-class GameObject gobj where
-    move :: GameArgs -> gobj -> (GameArgs, gobj)
-    render :: GameArgs -> gobj -> IO (GameArgs, gobj)
+makeLenses ''GameScene
+               
+newGameOverScene :: ImageSet -> GameScene
+newGameOverScene imageSet = 
+    GameOverScene{_backPlane=blackImageObj imageSet,
+                  _gos_alpha=0}
+
               
 instance GameObject GameScene where
-    move ga gs@GameOverScene{} = (ga, gs)
-    render ga gs@GameOverScene{} = do
+    move gs@GameOverScene{} gameargs =
+        (True,
+         gameargs,
+         gs {_gos_alpha = (max 155 ((_gos_alpha gs) + 10))})
+--         gs&gos_alpha .~ (max 155 (gs^.gos_alpha + 10)) )
+
+    move gs@RetryScene{} gameargs =
+        (not $ any (== ButtonLeft) $ mouseBtn gameargs,
+         gameargs,
+         gs)
+
+        
+    render gs@GameOverScene{} gameargs = do
         mainSurf <- SDL.getVideoSurface
+        renderImageObj mainSurf (gameOverObj gameargs) 
+        renderImage (gameover $ imageSet gameargs) mainSurf 0 0 349 57 255 0x00000000
 
-        renderGameOver mainSurf (imageSet ga) ga
-
-        return (ga, gs)
-               
+        
+    render rs@RetryScene{} gameargs = 
+        return True
+                    
 --nullBlockObj =
 --    BlockObj (-1) (-1) BS_Stay BlockNone Nothing
 
@@ -269,20 +295,39 @@ nextFrame gameargs
       (False, fb) -> do
         return $ gameargs{fieldBlock = fb}
 
-  | (gameState gameargs) == GS_GameOver = 
+  | (gameState gameargs) == GS_GameOver =                                             
       let
           gobj = gameOverObj gameargs
           a    = fromInteger $ min 255 $ toInteger $ alpha gobj + 10
-      in
-        if a < 155 then 
-            return gameargs{gameOverObj = gobj{alpha = a}}
-        else
-            return gameargs{gameOverObj = gobj{alpha = a},
-                            gameState = GS_Retry}
+      in do
+        return $ moveScenes $ if a < 155 then 
+                                gameargs{gameOverObj = gobj{alpha = a}}
+                            else
+                                gameargs{gameOverObj = gobj{alpha = a},
+                                                       gameState = GS_Retry}
 
   | (gameState gameargs) == GS_Retry = 
       return gameargs
 
+execScenes :: (GameScene -> GameArgs -> (Bool, GameArgs, GameScene)) -> GameArgs -> GameArgs
+execScenes f gameargs =
+    let
+        (gameargsNew, gameScenesNew) =
+            Util.mapAccumFilterR (\ga scene -> case f scene ga of
+                                                 (True, g, s) -> (g, Just s)
+                                                 (False, g, _) -> (g, Nothing))
+                                                               gameargs (gameScenes gameargs)
+    in
+      gameargsNew {gameScenes = gameScenesNew}
+    
+              
+moveScenes :: GameArgs -> GameArgs
+moveScenes = execScenes move
+
+renderScenes :: GameArgs -> IO ()
+renderScenes gameargs =
+    mapM_  (\x -> render x gameargs) (gameScenes gameargs)                 
+             
 addEraseBounus:: Int -> GameArgs -> GameArgs
 addEraseBounus 0 args =
   args{chain = 0}
@@ -310,8 +355,8 @@ renderFrame fps gameargs = do
 
   renderTimeArrow mainSurf imageset (lifeTime gameargs)
 
-  mapM_ (\x -> render gameargs x) (gameScenes gameargs)
-
+  renderScenes gameargs
+                  
   SDL.flip mainSurf
   return True
 
@@ -364,19 +409,19 @@ renderImage srcSurf dstSurf x y w h a ck = do
   SDL.setAlpha srcSurf [SrcAlpha] a
   SDL.blitSurface srcSurf Nothing dstSurf (Just (Rect x y w h))
 
-renderGameOver:: Surface -> ImageSet -> GameArgs -> IO Bool     
-renderGameOver mainSurf imageset gameargs 
-    | (gameState gameargs) == GS_GameOver = 
-        render
-    | (gameState gameargs) == GS_Retry =
-        render
-    | otherwise = 
-        return True
+-- renderGameOver:: Surface -> ImageSet -> GameArgs -> IO Bool     
+-- renderGameOver mainSurf imageset gameargs 
+--     | (gameState gameargs) == GS_GameOver = 
+--         render
+--     | (gameState gameargs) == GS_Retry =
+--         render
+--     | otherwise = 
+--         return True
 
-    where
-      render = do
-          renderImageObj mainSurf (gameOverObj gameargs) 
-          renderImage (gameover imageset) mainSurf 0 0 349 57 255 0x00000000
+--     where
+--       render = do
+--           renderImageObj mainSurf (gameOverObj gameargs) 
+--           renderImage (gameover imageset) mainSurf 0 0 349 57 255 0x00000000
 
 createBlockObj:: Int -> Int -> BlockType -> ImageSet -> BlockObj
 createBlockObj x y blocktype imageset =
@@ -680,7 +725,7 @@ decLifeTime n gameargs =
       if lt > 0 then gameargs{lifeTime = lt}
                 else gameargs{lifeTime  = 0,
                               gameState = GS_GameOver,
-                              gameScenes = (GameOverScene{backPlane=blackImageObj (imageSet gameargs)}:(gameScenes gameargs))}
+                              gameScenes = (newGameOverScene $ imageSet gameargs) : (gameScenes gameargs)}
 
 --setBlockImgPos:: BlockObj -> BlockObj
 --setBlockImgPos obj =
@@ -689,3 +734,4 @@ decLifeTime n gameargs =
 --        imgY = 50 + (fieldBlockMaxY-(posY obj))*32
 --    in
 --        obj {imageObj = ((imageObj obj) {x = imgX, y = imgY})}
+
