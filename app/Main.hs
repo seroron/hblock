@@ -40,7 +40,7 @@ fieldBottom = fieldTop + fieldBlockMaxY*fieldBlockSize
                  
 systemFPSTime  = 1000/30
 
-initLifeTime = 30
+initLifeTime = 30000
 
 maxLifeTime = toInteger 500
 
@@ -73,7 +73,7 @@ data ImageObj = ImageObj {
 }
 
 data BlockType =
-    BlockNone | BlockGuard | BlockA | BlockB | BlockC
+    BlockNone | BlockG | BlockA | BlockB | BlockC | BlockWall
     deriving (Eq, Show)
 
 data BlockState =
@@ -211,7 +211,7 @@ loadImages = do
     blockA <- SDL.loadBMP "img/blue.bmp"
     blockB <- SDL.loadBMP "img/yellow.bmp"
     blockC <- SDL.loadBMP "img/purple.bmp"
-    blockG <- SDL.loadBMP "img/green.bmp"
+    blockG <- SDL.loadBMP "img/guard.bmp"
     frame  <- SDL.loadBMP "img/rotate_frame.bmp"
     numbers <- mapM SDL.loadBMP ["img/n" ++ (show a) ++ ".bmp" | a <- [0..9]]
     backGround <- SDL.loadBMP "img/background.bmp"
@@ -430,6 +430,7 @@ createBlockObj x y blocktype imageset =
       | blocktype == BlockA = blockA imageset
       | blocktype == BlockB = blockB imageset
       | blocktype == BlockC = blockC imageset
+      | blocktype == BlockG = blockG imageset
 
     imageobj = ImageObj (fromIntegral $ defaultBlockImgPosX x)
                         (fromIntegral $ defaultBlockImgPosY y)
@@ -445,15 +446,16 @@ createRandomBlockObj x y imageset = do
     nextBlockType:: State StdGen BlockType
     nextBlockType = do
       gen <- get
-      let (num, newgen) =  randomR (0, 2) gen
+      let (num, newgen) =  randomR (0, 3) gen
       put newgen
       return $ putBlock num  
 
     putBlock:: Int -> BlockType
-    putBlock 0 =  BlockA
-    putBlock 1 =  BlockB
-    putBlock 2 =  BlockC
-
+    putBlock 0 = BlockA
+    putBlock 1 = BlockB
+    putBlock 2 = BlockC
+    putBlock 3 = BlockG
+    putBlock _ = BlockG
 
 initField:: ImageSet -> StdGen -> (FieldBlock, StdGen)
 initField imageset stdgen =
@@ -596,10 +598,8 @@ setRemoveState:: FieldBlock -> (Int, FieldBlock)
 setRemoveState fieldBlock =
   let
     eraselist  = getEraseList
-    fieldBlock' = foldl (\fl (x, y) -> changeBlock x y (\f -> f {blockstate = BS_Removing}) fl)
-                       fieldBlock eraselist
   in
-    (length eraselist, fieldBlock')
+    (length eraselist, changeBlockState eraselist)
   where
     getEraseList:: [(Int, Int)]
     getEraseList =
@@ -607,8 +607,11 @@ setRemoveState fieldBlock =
               [(x,y) | x<-[0..fieldBlockMaxX], y<-[0..fieldBlockMaxY]]
 
     baseblock:: [(Int, Int)] -> (Int, Int) -> [(Int, Int)]
-    baseblock eraselist pos =
-      foldl (eraseline pos) eraselist [(1,0), (0,1)]
+    baseblock eraselist pos 
+        | getBlockType fieldBlock (fst pos) (snd pos) == BlockG
+            = eraselist
+        | otherwise = 
+            foldl (eraseline pos) eraselist [(1,0), (0,1)]
 
     eraseline:: (Int, Int) -> [(Int, Int)] -> (Int, Int) -> [(Int, Int)]
     eraseline (x, y) eraselist (dx, dy) =
@@ -620,26 +623,36 @@ setRemoveState fieldBlock =
        else
          eraselist
 
+    changeBlockState:: [(Int, Int)] -> FieldBlock
+    changeBlockState eraselist =
+        foldl (\fl (x, y) -> changeAroundBlockState (x, y) $
+                             changeBlock x y (\f -> f {blockstate = BS_Removing}) fl)
+              fieldBlock eraselist
+
+    changeAroundBlockState:: (Int, Int) -> FieldBlock -> FieldBlock
+    changeAroundBlockState (x, y) fieldblock =
+        cbt (x, y-1) $ cbt (x, y+1) $ cbt (x+1, y) $ cbt (x-1, y) fieldblock
+        where
+          cbt (x, y) f
+              | 0 <= x && x < fieldBlockMaxX &&
+                0 <= y && y < fieldBlockMaxY &&
+                getBlockType f x y == BlockG =
+                  changeBlock x y (\t -> t {blockstate = BS_Removing}) f
+              | otherwise =
+                  f
+            
 sameBlockNum::  FieldBlock -> Int -> Int -> Int -> Int -> Int
 sameBlockNum fieldBlock x y dx dy =
-  sameBlockNum' (x+dx) (y+dy) (getBlock fieldBlock x y)
+  sameBlockNum' (x+dx) (y+dy) (getBlockType fieldBlock x y)
     where
       sameBlockNum':: Int -> Int -> BlockType -> Int
       sameBlockNum' x' y' b
         | 0<=x && x<fieldBlockMaxX &&
           0<=y && y<fieldBlockMaxY &&
-          b == (getBlock fieldBlock x' y') =
+          b == (getBlockType fieldBlock x' y') =
             sameBlockNum' (x'+dx) (y'+dy) b
         | otherwise =
             (abs (x'-x)) + (abs (y'-y))
-
-      getBlock:: FieldBlock -> Int -> Int -> BlockType
-      getBlock fieldBlock x y
-        | 0<=x && x<fieldBlockMaxX &&
-          0<=y && y<fieldBlockMaxY =
-            blocktype (fieldBlock !! x !! y)
-        | otherwise =
-            BlockGuard
 
 changeBlock:: Int -> Int -> (BlockObj -> BlockObj) -> FieldBlock -> FieldBlock
 changeBlock x y func fieldBlock =
@@ -652,10 +665,18 @@ changeBlock x y func fieldBlock =
 --renumberBlock =
 --    mapFieldObj (\x y obj -> obj {posX = x, posY = y})
 
-getBlock:: Int -> Int -> FieldBlock -> BlockObj
-getBlock x y fieldBlock =
+getBlock:: FieldBlock -> Int -> Int -> BlockObj
+getBlock fieldBlock x y =
      fieldBlock!!x!!y
 
+getBlockType:: FieldBlock -> Int -> Int -> BlockType
+getBlockType fieldBlock x y
+    | 0<=x && x<fieldBlockMaxX &&
+      0<=y && y<fieldBlockMaxY =
+          blocktype (fieldBlock !! x !! y)
+    | otherwise =
+        BlockWall
+               
 setBlock:: Int -> Int -> BlockObj -> FieldBlock -> FieldBlock
 setBlock x y obj fieldBlock =
     changeBlock x y (\_ -> obj) fieldBlock
@@ -663,8 +684,8 @@ setBlock x y obj fieldBlock =
 swapBlock:: Int -> Int -> Int -> Int -> FieldBlock -> FieldBlock
 swapBlock ax ay bx by fieldBlock =
     let
-        a = getBlock ax ay fieldBlock
-        b = getBlock bx by fieldBlock
+        a = getBlock fieldBlock ax ay 
+        b = getBlock fieldBlock bx by
     in
         setBlock bx by a $ setBlock ax ay b fieldBlock
 
