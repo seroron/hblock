@@ -119,6 +119,8 @@ data GameArgs = GameArgs {
       hiScore :: Integer,
       score    :: Integer,
       chain    :: Integer,
+      level    :: Integer,
+      eraseCnt  :: Integer,
       lifeTime :: Integer,
       fieldBlock :: FieldBlock, 
       imageSet :: ImageSet, 
@@ -144,7 +146,7 @@ data GameScene =
       _cnt :: Int
     }
 
-makeLenses ''GameScene
+$(makeLenses ''GameScene)
                
 newGameOverScene :: ImageSet -> GameScene
 newGameOverScene imageSet = 
@@ -156,8 +158,8 @@ instance GameObject GameScene where
     move gs@GameOverScene{} gameargs =
         (True,
          gameargs,
-         gs {_gos_alpha = (max 155 ((_gos_alpha gs) + 10))})
---         gs&gos_alpha .~ (max 155 (gs^.gos_alpha + 10)) )
+        gs {_gos_alpha = (max 155 ((_gos_alpha gs) + 10))})
+-- --         gs&gos_alpha .~ (max 155 (gs^.gos_alpha + 10)) )
 
     move gs@RetryScene{} gameargs =
         (not $ any (== ButtonLeft) $ mouseBtn gameargs,
@@ -182,28 +184,31 @@ blackImageObj imageset =
 
 main :: IO ()
 main = do
-  stdgen <- getStdGen
   SDL.init [SDL.InitEverything]
   SDL.setVideoMode 640 480 32 []
   SDL.setCaption "hblock" "hblock"
+     
   imageset <- loadImages
-  let (fb, newgen) = initField imageset stdgen
-  fpsLoop 33 checkEvent ioFrame nextFrame renderFrame $
-       GameArgs {
+  stdgen <- getStdGen
+  let gameargs = GameArgs {
          gameState = GS_Removing,
-         hiScore   = 0,
-         score     = 0,
-         chain     = 0,
-         lifeTime  = initLifeTime,
-         fieldBlock = fb,
+         hiScore    = 0,
+         score      = 0,
+         chain      = 0,
+         level      = 1,
+         eraseCnt   = 0,
+         lifeTime   = initLifeTime,
+         fieldBlock = [[]],
          imageSet   = imageset,
-         stdGen     = newgen,
+         stdGen     = stdgen,
          mouseX     = 0,
          mouseY     = 0,
          mouseBtn   = [],
          gameOverObj = ImageObj 0 0 640 480 0 (blackBG imageset),
          gameScenes = []
        }
+              
+  fpsLoop 33 checkEvent ioFrame nextFrame renderFrame $   execState initField gameargs
   SDL.quit
      
 loadImages:: IO ImageSet
@@ -230,84 +235,150 @@ ioFrame gameargs = do
     (x, y, b) <- getMouseState
     return gameargs{mouseX = x, mouseY = y, mouseBtn = b}
 
-nextFrame:: GameArgs -> Maybe GameArgs 
-nextFrame gameargs 
-  | (gameState gameargs) == GS_Stay = do
---    trace "stay" $ Just 1
-    case (any (== ButtonLeft) $ mouseBtn gameargs) of
-      True -> 
-        let 
-          (bx, by) = mousePos2fieldPos (mouseX gameargs, mouseY gameargs)
-          fb = setRotateState bx by $ fieldBlock gameargs
-        in
-          return $ decLifeTime 10 
-                 $ gameargs{gameState = GS_Rotating, 
-                            fieldBlock = fb}
-      False ->
-          return $ decLifeTime 1 gameargs
+gameStateStay:: State GameArgs Bool
+gameStateStay = do
+  gameargs <- get
+  case (any (== ButtonLeft) $ mouseBtn gameargs) of
+    True -> do 
+      modifyFieldBlock $ setBlockRotateState $ mousePos2fieldPos (mouseX gameargs, mouseY gameargs)
+      decLifeTime 10
+      setGameState GS_Rotating
+    False ->
+      decLifeTime 1
+  return True
 
-  | (gameState gameargs) == GS_Removing = do
---    trace "removeing" $ Just 1
-    case (removeBlock $ fieldBlock gameargs) of
-      (True, fb) ->
-        let 
-          (fb', gen) = appendBlock fb (stdGen gameargs) (imageSet gameargs) 
-        in
-         return gameargs{gameState = GS_Dropping,
-                         fieldBlock = setDropState fb',
-                         stdGen = gen}
-      (False, fb) ->
-        return gameargs{fieldBlock = fb}
+gameStateRemoving:: State GameArgs Bool
+gameStateRemoving = do
+  modifyFieldBlock removeBlock
+  fb <- getFieldBlock
+  case (anyFieldObjState BS_Stay fb) of     
+    True -> do
+      appendBlock
+      modifyFieldBlock setDropState
+      setGameState GS_Dropping
+    False ->
+      return ()
+  return True
 
-  | (gameState gameargs) == GS_Dropping = do
---    trace "dropping" $ Just 1
-    case (dropBlock $ fieldBlock gameargs) of
-      (True, fb) ->
-        let 
-            (eraseNum, fb') = setRemoveState fb
-        in
-          if eraseNum>0 then
-            return $
-              addEraseBounus eraseNum $ 
-              gameargs{gameState = GS_Removing,
-                       fieldBlock = fb'}
-          else 
-            return gameargs{gameState = GS_Stay,
-                            fieldBlock = fb'}
-      (False, fb) ->
-        return gameargs{fieldBlock = fb}
+gameStateDropping:: State GameArgs Bool
+gameStateDropping = do
+  modifyFieldBlock dropBlock
+  fb <- getFieldBlock
+  nextState $ anyFieldObjState BS_Stay fb
+            
+  where
+    nextState:: Bool -> State GameArgs Bool
+    nextState True = do
+      eraseNum <- setRemoveState
+      if eraseNum>0 then
+          do
+            incEraseCnt
+            setLevel
+            addEraseBounus eraseNum
+            setGameState GS_Removing
+      else 
+          setGameState GS_Stay
+      return True
+             
+    nextState _ =
+        return True
+                
+    dropBlock:: FieldBlock -> FieldBlock
+    dropBlock fieldBlock = 
+        mapFieldObj dropBlock' fieldBlock
+        where
+          dropBlock' x y obj
+              | (blockstate obj) == BS_Dropping =
+                  let
+                      imgY = py $ imageObj obj
+                      defaultY = fromIntegral $ defaultBlockImgPosY y
+                  in
+                    if imgY+6 <= defaultY then setBlockImgPosY (imgY+6) obj
+                    else obj {blockstate = BS_Stay,
+                              imageObj = (imageObj obj){py = defaultY}}
+              | otherwise =
+                  obj
 
-  | (gameState gameargs) == GS_Rotating = do
---    trace "rotating" $ Just 1
-    case (rotateBlock $ fieldBlock gameargs) of
-      (True, fb) ->
-        let 
-            (eraseNum, fb') = setRemoveState fb
-        in
-         if eraseNum>0 then do 
-           return $
-             addEraseBounus eraseNum $
-             gameargs{gameState = GS_Removing,
-                      fieldBlock = fb'}
-         else 
-             return gameargs{gameState = GS_Stay,
-                             fieldBlock = fb'}
-      (False, fb) -> do
-        return $ gameargs{fieldBlock = fb}
 
-  | (gameState gameargs) == GS_GameOver =                                             
-      let
-          gobj = gameOverObj gameargs
-          a    = fromInteger $ min 255 $ toInteger $ alpha gobj + 10
-      in do
-        return $ moveScenes $ if a < 155 then 
-                                gameargs{gameOverObj = gobj{alpha = a}}
-                            else
-                                gameargs{gameOverObj = gobj{alpha = a},
-                                                       gameState = GS_Retry}
+gameStateRotating:: State GameArgs Bool
+gameStateRotating = do
+  modifyFieldBlock rotateBlock
+  fb <- getFieldBlock
+  nextState $ anyFieldObjState BS_Stay fb
 
-  | (gameState gameargs) == GS_Retry = 
-      return gameargs
+  where
+    nextState:: Bool -> State GameArgs Bool
+    nextState True = do
+      eraseNum <- setRemoveState
+      if eraseNum>0 then
+          do
+            incEraseCnt
+            setLevel
+            addEraseBounus eraseNum
+            setGameState GS_Removing
+      else 
+          setGameState GS_Stay
+      return True
+             
+    nextState _ =
+        return True
+
+
+    rotateBlock:: FieldBlock -> FieldBlock
+    rotateBlock fb =
+        mapFieldObj rotateBlock' fb
+        where
+        rotateBlock' x y obj
+            | (blockstate obj) == BS_RotateRight =
+                let
+                    imgX = px $ imageObj obj
+                    defaultX = fromIntegral $ defaultBlockImgPosX x
+                in
+                    if imgX+6 <= defaultX then obj {imageObj = ((imageObj obj){px = (imgX+6)})}
+                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), blockstate = BS_Stay}
+            | (blockstate obj) == BS_RotateLeft =
+                let
+                    imgX = px $ imageObj obj
+                    defaultX = fromIntegral $ defaultBlockImgPosX x
+                in
+                    if imgX-6 >= defaultX then obj {imageObj = ((imageObj obj){px = (imgX-6)})}
+                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), blockstate = BS_Stay}
+            | otherwise =
+                obj
+
+gameStateGameOver:: State GameArgs Bool
+gameStateGameOver = do
+  gameargs <- get
+  let gobj = gameOverObj gameargs
+  let a = fromInteger $ min 255 $ toInteger $ alpha gobj + 10
+  put $ moveScenes $ if a < 155 then 
+                           gameargs{gameOverObj = gobj{alpha = a}}
+                       else
+                           gameargs{gameOverObj = gobj{alpha = a},
+                                                  gameState = GS_Retry}
+  return True
+         
+nextFrame:: GameArgs -> Maybe GameArgs
+nextFrame ga =
+  return $ execState nextFrame' ga 
+    where
+      nextFrame':: State GameArgs Bool
+      nextFrame' = do
+        gameargs <- get
+        case gameState gameargs of
+          GS_Stay -> 
+             gameStateStay            
+          GS_Removing ->
+              gameStateRemoving
+          GS_Dropping -> 
+              gameStateDropping
+          GS_Rotating -> 
+              gameStateRotating
+          GS_GameOver ->
+              gameStateGameOver
+          GS_Retry -> 
+              return True
+        return True
 
 execScenes :: (GameScene -> GameArgs -> (Bool, GameArgs, GameScene)) -> GameArgs -> GameArgs
 execScenes f gameargs =
@@ -328,14 +399,23 @@ renderScenes :: GameArgs -> IO ()
 renderScenes gameargs =
     mapM_  (\x -> render x gameargs) (gameScenes gameargs)                 
              
-addEraseBounus:: Int -> GameArgs -> GameArgs
-addEraseBounus 0 args =
-  args{chain = 0}
-addEraseBounus eraseNum args =
-  args{chain    = (chain args) + 1,
-       score    = (score args) + (toInteger eraseNum)*10*((chain args)+1),
-       lifeTime = min maxLifeTime $
-                      (lifeTime args) + (toInteger eraseNum)*((chain args)+1)}
+addEraseBounus:: Int -> State GameArgs ()
+addEraseBounus 0 =
+    modify $ \gameargs -> gameargs{chain = 0}
+addEraseBounus eraseNum =
+    modify
+    $ \gameargs -> gameargs{chain    = (chain gameargs) + 1,
+                            score    = (score gameargs) + (toInteger eraseNum)*10*((chain gameargs)+1),
+                            lifeTime = min maxLifeTime $
+                                       (lifeTime gameargs) + (toInteger eraseNum)*((chain gameargs)+1)}
+
+clearChain:: State GameArgs ()
+clearChain = do
+  modify $ \gameargs -> gameargs{chain = 0}
+
+incChain:: State GameArgs ()
+incChain = do
+  modify $ \gameargs -> gameargs{chain = (chain gameargs) + 1}
 
 renderFrame:: Float -> GameArgs -> IO Bool
 renderFrame fps gameargs = do
@@ -349,7 +429,7 @@ renderFrame fps gameargs = do
   renderNumer mainSurf imageset 635  70 (hiScore gameargs)  
   renderNumer mainSurf imageset 635 170 (score gameargs)
   renderNumer mainSurf imageset 635 270 (chain gameargs)
-  renderNumer mainSurf imageset 635 370 (lifeTime gameargs)
+  renderNumer mainSurf imageset 635 370 (level gameargs)
 
   -- renderNumer mainSurf imageSet 620 430 $ floor fps
 
@@ -423,31 +503,32 @@ renderImage srcSurf dstSurf x y w h a ck = do
 --           renderImageObj mainSurf (gameOverObj gameargs) 
 --           renderImage (gameover imageset) mainSurf 0 0 349 57 255 0x00000000
 
-createBlockObj:: Int -> Int -> BlockType -> ImageSet -> BlockObj
-createBlockObj x y blocktype imageset =
+createBlockObj:: Int -> Int -> BlockType -> State GameArgs BlockObj
+createBlockObj x y blocktype = do
+  gameargs <- get
   let
-    image
-      | blocktype == BlockA = blockA imageset
-      | blocktype == BlockB = blockB imageset
-      | blocktype == BlockC = blockC imageset
-      | blocktype == BlockG = blockG imageset
+      imageset = imageSet gameargs
+      image
+          | blocktype == BlockA = blockA imageset
+          | blocktype == BlockB = blockB imageset
+          | blocktype == BlockC = blockC imageset
+          | blocktype == BlockG = blockG imageset
+      imageobj = ImageObj (fromIntegral $ defaultBlockImgPosX x)
+                           (fromIntegral $ defaultBlockImgPosY y)
+                           fieldBlockSize fieldBlockSize 255 image
+  
+  return $ BlockObj BS_Stay blocktype imageobj
 
-    imageobj = ImageObj (fromIntegral $ defaultBlockImgPosX x)
-                        (fromIntegral $ defaultBlockImgPosY y)
-                        fieldBlockSize fieldBlockSize 255 image
-  in
-    BlockObj BS_Stay blocktype imageobj
-
-createRandomBlockObj:: Int -> Int -> ImageSet -> State StdGen BlockObj
-createRandomBlockObj x y imageset = do
+createRandomBlockObj:: Int -> Int -> State GameArgs BlockObj
+createRandomBlockObj x y = do
   bt <- nextBlockType
-  return $ createBlockObj x y bt imageset
+  createBlockObj x y bt
   where
-    nextBlockType:: State StdGen BlockType
+    nextBlockType:: State GameArgs BlockType
     nextBlockType = do
-      gen <- get
-      let (num, newgen) =  randomR (0, 3) gen
-      put newgen
+      gameargs <- get
+      let (num, newgen) =  randomR (0, 3) $ stdGen gameargs
+      put gameargs{stdGen = newgen}
       return $ putBlock num  
 
     putBlock:: Int -> BlockType
@@ -457,19 +538,15 @@ createRandomBlockObj x y imageset = do
     putBlock 3 = BlockG
     putBlock _ = BlockG
 
-initField:: ImageSet -> StdGen -> (FieldBlock, StdGen)
-initField imageset stdgen =
-    runState initField' stdgen
-    where
-      initField':: State StdGen FieldBlock
-      initField' = do
-        blockList <- sequence [createRandomBlockObj x y imageset 
-                                   | x<-[0..(fieldBlockMaxX-1)], y<-[0..(fieldBlockMaxY-1)]]
-        return $ splitEvery fieldBlockMaxX blockList
+initField:: State GameArgs ()
+initField = do
+  blockList <- sequence [createRandomBlockObj x y 
+                             | x<-[0..(fieldBlockMaxX-1)], y<-[0..(fieldBlockMaxY-1)]]
+  putFieldBlock $ splitEvery fieldBlockMaxX blockList
 
 renderFiledBlock:: Surface -> FieldBlock -> IO Bool
-renderFiledBlock mainSurf fieldBlock =
-  fmap and $ mapM (\b -> renderImageObj mainSurf (imageObj b)) $ join fieldBlock
+renderFiledBlock mainSurf fieldblock =
+  fmap and $ mapM (\b -> renderImageObj mainSurf (imageObj b)) $ join fieldblock
 
 renderImageObj:: Surface -> ImageObj -> IO Bool
 renderImageObj mainSurf imageobj 
@@ -494,26 +571,39 @@ mousePos2fieldPos (x, y) =
 -- createBlockTypeList:: Int -> State GameArgs [BlockType]
 -- createBlockTypeList num = do 
 --   mapM (\_ -> nextBlockType) [1..num]      
-                        
-setRotateState:: Int -> Int -> FieldBlock -> FieldBlock
-setRotateState x y fieldBlock = 
-  swapBlock x y (x+1) y 
-    $ changeBlock  x    y (\obj -> obj{blockstate = BS_RotateRight})
-    $ changeBlock (x+1) y (\obj -> obj{blockstate = BS_RotateLeft}) fieldBlock
 
-appendBlock:: FieldBlock -> StdGen -> ImageSet -> (FieldBlock, StdGen)
-appendBlock fieldBlock stdgen imageset = 
-  runState appendBlock' stdgen
-  where
-    appendBlock':: State StdGen FieldBlock
-    appendBlock' = 
-      zipWithM putBlock fieldBlock [0..]
+getFieldBlock:: State GameArgs FieldBlock
+getFieldBlock = do
+  gameargs <- get
+  return $ fieldBlock gameargs
+
+putFieldBlock:: FieldBlock -> State GameArgs ()
+putFieldBlock fb =
+  modify (\gameargs ->
+              gameargs{fieldBlock = fb})
     
-    putBlock:: [BlockObj] -> Int -> State StdGen [BlockObj]
-    putBlock list x = do
+modifyFieldBlock:: (FieldBlock -> FieldBlock) -> State GameArgs ()
+modifyFieldBlock func = do
+  modify (\gameargs ->
+              gameargs{fieldBlock = func $ fieldBlock gameargs})
+
+setBlockRotateState:: (Int, Int) -> FieldBlock -> FieldBlock
+setBlockRotateState (x, y) fb = 
+    swapBlock x y (x+1) y $
+    changeBlock  x    y (\obj -> obj{blockstate = BS_RotateRight}) $
+    changeBlock (x+1) y (\obj -> obj{blockstate = BS_RotateLeft}) fb
+               
+appendBlock:: State GameArgs () -- FieldBlock -> StdGen -> ImageSet -> (FieldBlock, StdGen)
+appendBlock = do
+  fb  <- getFieldBlock
+  fb' <- zipWithM putBlock [0..] fb
+  putFieldBlock fb'
+  where
+    putBlock:: Int -> [BlockObj] -> State GameArgs [BlockObj]
+    putBlock x list = do
       let len = length list
       let newBlockNum = fieldBlockMaxY - len
-      al <- mapM (\y -> createRandomBlockObj x (newBlockNum + y) imageset) 
+      al <- mapM (\y -> createRandomBlockObj x (newBlockNum + y)) 
                  [len..(fieldBlockMaxY-1)]
       return $ list ++ al
     
@@ -528,34 +618,9 @@ setDropState =
             | otherwise =
                 obj
 
-dropBlock:: FieldBlock -> (Bool, FieldBlock)
-dropBlock fieldBlock = 
-  let 
-    fieldBlock' = mapFieldObj dropBlock' fieldBlock
-    nextState   = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldBlock'
-  in
-   (nextState, fieldBlock')
-     where
-        dropBlock' x y obj
-            | (blockstate obj) == BS_Dropping =
-                let
-                    imgY = py $ imageObj obj
-                    defaultY = fromIntegral $ defaultBlockImgPosY y
-                in
-                    if imgY+6 <= defaultY then setBlockImgPosY (imgY+6) obj
-                                          else obj {blockstate = BS_Stay,
-                                                    imageObj = (imageObj obj){py = defaultY}}
-            | otherwise =
-                obj
-
-removeBlock:: FieldBlock -> (Bool, FieldBlock)
-removeBlock fieldBlock =
-    let 
-      fieldBlock' = map (filter (\x -> (blockstate x) /= BS_Removed)) 
-                      $ mapFieldObj decAplha fieldBlock
-      nextState   = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldBlock'
-    in
-      (nextState, fieldBlock')
+removeBlock:: FieldBlock -> FieldBlock
+removeBlock fb =
+    map (filter (\x -> (blockstate x) /= BS_Removed)) $ mapFieldObj decAplha fb
     where
         decAplha x y blockobj
             | (blockstate blockobj) == BS_Removing  =
@@ -568,70 +633,48 @@ removeBlock fieldBlock =
             | otherwise =
                 blockobj
 
-rotateBlock:: FieldBlock -> (Bool, FieldBlock)
-rotateBlock fieldBlock =
-    let 
-      fieldBlock' = mapFieldObj rotateBlock' fieldBlock
-      nextState  = anyFieldObj (\obj -> (blockstate obj) == BS_Stay) fieldBlock'
-    in
-      (nextState, fieldBlock')
+
+createEraseList:: FieldBlock -> [(Int, Int)]
+createEraseList fb =
+    nub $ foldl baseblock []
+            [(x,y) | x<-[0..fieldBlockMaxX], y<-[0..fieldBlockMaxY]]
+
     where
-        rotateBlock' x y obj
-            | (blockstate obj) == BS_RotateRight =
-                let
-                    imgX = px $ imageObj obj
-                    defaultX = fromIntegral $ defaultBlockImgPosX x
-                in
-                    if imgX+6 <= defaultX then obj {imageObj = ((imageObj obj){px = (imgX+6)})}
-                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), blockstate = BS_Stay}
-            | (blockstate obj) == BS_RotateLeft =
-                let
-                    imgX = px $ imageObj obj
-                    defaultX = fromIntegral $ defaultBlockImgPosX x
-                in
-                    if imgX-6 >= defaultX then obj {imageObj = ((imageObj obj){px = (imgX-6)})}
-                    else                       obj {imageObj = ((imageObj obj){px = defaultX}), blockstate = BS_Stay}
-            | otherwise =
-                obj
-
-setRemoveState:: FieldBlock -> (Int, FieldBlock)
-setRemoveState fieldBlock =
-  let
-    eraselist  = getEraseList
-  in
-    (length eraselist, changeBlockState eraselist)
-  where
-    getEraseList:: [(Int, Int)]
-    getEraseList =
-      nub $ foldl baseblock []
-              [(x,y) | x<-[0..fieldBlockMaxX], y<-[0..fieldBlockMaxY]]
-
-    baseblock:: [(Int, Int)] -> (Int, Int) -> [(Int, Int)]
-    baseblock eraselist pos 
-        | getBlockType fieldBlock (fst pos) (snd pos) == BlockG
+      baseblock:: [(Int, Int)] -> (Int, Int) -> [(Int, Int)]
+      baseblock eraselist pos 
+        | getBlockType fb (fst pos) (snd pos) == BlockG
             = eraselist
         | otherwise = 
             foldl (eraseline pos) eraselist [(1,0), (0,1)]
 
-    eraseline:: (Int, Int) -> [(Int, Int)] -> (Int, Int) -> [(Int, Int)]
-    eraseline (x, y) eraselist (dx, dy) =
-      let
-        len = sameBlockNum fieldBlock x y dx dy
-      in
-       if len >= 4 then
-         foldl (\el n -> (x+n*dx,y+n*dy):el) eraselist [0..len-1]
-       else
-         eraselist
+      eraseline:: (Int, Int) -> [(Int, Int)] -> (Int, Int) -> [(Int, Int)]
+      eraseline (x, y) eraselist (dx, dy) =
+          let
+              len = sameBlockNum fb x y dx dy
+          in
+            if len >= 4 then
+                foldl (\el n -> (x+n*dx,y+n*dy):el) eraselist [0..len-1]
+            else
+                eraselist
 
-    changeBlockState:: [(Int, Int)] -> FieldBlock
-    changeBlockState eraselist =
+                
+setRemoveState:: State GameArgs Int
+setRemoveState = do
+  fb <- getFieldBlock
+  let eraselist  = createEraseList fb
+  modifyFieldBlock $ changeBlockState eraselist
+  return $ length eraselist
+
+  where
+    changeBlockState:: [(Int, Int)] -> FieldBlock -> FieldBlock
+    changeBlockState eraselist fb =
         foldl (\fl (x, y) -> changeAroundBlockState (x, y) $
                              changeBlock x y (\f -> f {blockstate = BS_Removing}) fl)
-              fieldBlock eraselist
+                    fb eraselist
 
     changeAroundBlockState:: (Int, Int) -> FieldBlock -> FieldBlock
-    changeAroundBlockState (x, y) fieldblock =
-        cbt (x, y-1) $ cbt (x, y+1) $ cbt (x+1, y) $ cbt (x-1, y) fieldblock
+    changeAroundBlockState (x, y) fb =
+        cbt (x, y-1) $ cbt (x, y+1) $ cbt (x+1, y) $ cbt (x-1, y) fb
         where
           cbt (x, y) f
               | 0 <= x && x < fieldBlockMaxX &&
@@ -705,6 +748,10 @@ anyFieldObj:: (BlockObj -> Bool) -> FieldBlock -> Bool
 anyFieldObj func fieldBlock =
     foldlFieldObj (\a _ _ obj -> a && func obj) True fieldBlock
 
+anyFieldObjState:: BlockState -> FieldBlock -> Bool
+anyFieldObjState bs fb = 
+    anyFieldObj (\obj -> (blockstate obj) == bs) fb
+                  
 mapFieldObj:: (Int -> Int -> BlockObj -> BlockObj) -> FieldBlock -> FieldBlock
 mapFieldObj func fieldBlock =
     zipWith mapY [0..] fieldBlock
@@ -738,15 +785,18 @@ defaultBlockImgPosY:: Int -> Int
 defaultBlockImgPosY y =
     (fieldBlockMaxY-y-1)*fieldBlockSize + fieldTop
 
-decLifeTime:: Integer -> GameArgs -> GameArgs
-decLifeTime n gameargs =
-    let
-        lt = (lifeTime gameargs) - n
-    in
-      if lt > 0 then gameargs{lifeTime = lt}
-                else gameargs{lifeTime  = 0,
-                              gameState = GS_GameOver,
-                              gameScenes = (newGameOverScene $ imageSet gameargs) : (gameScenes gameargs)}
+decLifeTime:: Integer -> State GameArgs ()
+decLifeTime n = do
+  gameargs <- get
+  let lt = (lifeTime gameargs) - n
+  put $
+      case lt > 0 of
+        True ->
+            gameargs{lifeTime = lt}
+        False ->
+            gameargs{lifeTime  = 0,
+                     gameState = GS_GameOver,
+                     gameScenes = (newGameOverScene $ imageSet gameargs) : (gameScenes gameargs)}
 
 --setBlockImgPos:: BlockObj -> BlockObj
 --setBlockImgPos obj =
@@ -756,3 +806,16 @@ decLifeTime n gameargs =
 --    in
 --        obj {imageObj = ((imageObj obj) {x = imgX, y = imgY})}
 
+
+setLevel:: State GameArgs ()
+setLevel =
+    modify $ \gameargs -> gameargs{level = eraseCnt gameargs  `divint` 10 + 1}
+
+setGameState:: GameState -> State GameArgs ()
+setGameState gs =
+    modify $ \gameargs -> gameargs{gameState = gs}
+
+incEraseCnt:: State GameArgs ()
+incEraseCnt =
+    modify $ \gameargs -> gameargs{eraseCnt = (eraseCnt gameargs) + 1}
+                          
