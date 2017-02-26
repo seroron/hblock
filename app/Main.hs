@@ -18,7 +18,9 @@ module Main where
 import System.Random as Random
 import Graphics.UI.SDL as SDL
 import Data.List
+import Data.Lists
 import Data.Word
+import Data.Ord
 import Data.MultiSet (MultiSet)
 import Control.Monad
 import Control.Monad.State
@@ -27,7 +29,7 @@ import Control.Lens
     
 import Util
 import Fps
-
+import Graphics
 
 fieldBlockMaxX =10
 fieldBlockMaxY =10
@@ -40,7 +42,7 @@ fieldBottom = fieldTop + fieldBlockMaxY*fieldBlockSize
                  
 systemFPSTime  = 1000/30
 
-initLifeTime = 30000
+initLifeTime = 3
 
 maxLifeTime = toInteger 500
 
@@ -63,14 +65,6 @@ data ImageSet = ImageSet {
       gameover :: Surface
 }
 
-data ImageObj = ImageObj {
-      px :: Float,
-      py :: Float,
-      width :: Int,
-      height :: Int,
-      alpha :: Word8,
-      image :: Surface
-}
 
 data BlockType =
     BlockNone | BlockG | BlockA | BlockB | BlockC | BlockWall
@@ -128,69 +122,95 @@ data GameArgs = GameArgs {
       mouseX :: Int, 
       mouseY :: Int, 
       mouseBtn :: [MouseButton],
-      gameOverObj :: ImageObj,
-      gameScenes :: [GameScene]
---      gameObjs :: MultiSet GameObject
+      gameScenes :: [GameScene],
+      removedSceneTypes :: [GameSceneType],
+      appendedScenes :: [GameScene]
 }
 
 class GameObject gobj where
-    move ::  gobj -> GameArgs -> (Bool, GameArgs, GameScene)
+    move ::  gobj -> State GameArgs GameScene
     render :: gobj -> GameArgs -> IO Bool
 
+data GameSceneType =
+    Gst_GameOverScene |
+    Gst_RetryScene
+    deriving (Show, Enum, Eq, Ord)
+              
 data GameScene =
     GameOverScene {
-      _backPlane :: ImageObj,
-      _gos_alpha :: Int
+      sceneType :: GameSceneType,
+      gos_backPlane :: ImageObj,
+      gos_gameOverImgObj :: ImageObj
+--      gos_alpha :: Int
     } |
     RetryScene {
-      _cnt :: Int
+      sceneType :: GameSceneType,
+      cnt :: Int
     }
 
-$(makeLenses ''GameScene)
+--makeLenses ''GameScene
                
 newGameOverScene :: ImageSet -> GameScene
 newGameOverScene imageSet = 
-    GameOverScene{_backPlane=blackImageObj imageSet,
-                  _gos_alpha=0}
+    GameOverScene {sceneType          = Gst_GameOverScene, 
+                   gos_backPlane      = blackImageObj imageSet,
+                   gos_gameOverImgObj = ImageObj 0 0 640 480 255 0x00000000 (gameover imageSet)}
 
-              
+newRetryScene :: GameScene
+newRetryScene = 
+    RetryScene{sceneType = Gst_RetryScene,   
+               cnt       = 0}
+
+appendScene :: GameScene -> State GameArgs ()
+appendScene gs =
+    modify $ \gameargs -> gameargs{appendedScenes = gs:(appendedScenes gameargs)}
+
+removeScene :: GameSceneType -> State GameArgs ()
+removeScene gst =
+    modify $ \gameargs -> gameargs{removedSceneTypes = gst:(removedSceneTypes gameargs)}
+    
 instance GameObject GameScene where
-    move gs@GameOverScene{} gameargs =
-        (True,
-         gameargs,
-        gs {_gos_alpha = (max 155 ((_gos_alpha gs) + 10))})
--- --         gs&gos_alpha .~ (max 155 (gs^.gos_alpha + 10)) )
-
-    move gs@RetryScene{} gameargs =
-        (not $ any (== ButtonLeft) $ mouseBtn gameargs,
-         gameargs,
-         gs)
-
+    move gs@GameOverScene{}
+         | (alpha $ gos_backPlane gs) < 155 =
+             do
+               let nalpha = min 155 $ (alpha $ gos_backPlane gs) + 10
+               let ngs = gs {gos_backPlane = (gos_backPlane gs){alpha = nalpha}}
+               when(nalpha == 155) $ appendScene newRetryScene 
+               return ngs
+         | otherwise = do
+               return gs
+        
+    move gs@RetryScene{} = do
+      gameargs <- get
+      case any (== ButtonLeft) $ mouseBtn gameargs of
+        True -> do
+            removeScene Gst_GameOverScene
+            removeScene Gst_RetryScene
+            return gs
+        False ->
+            return gs
         
     render gs@GameOverScene{} gameargs = do
         mainSurf <- SDL.getVideoSurface
-        renderImageObj mainSurf (gameOverObj gameargs) 
-        renderImage (gameover $ imageSet gameargs) mainSurf 0 0 349 57 255 0x00000000
+        renderImageObj mainSurf (gos_backPlane gs)
+        renderImageObj mainSurf (gos_gameOverImgObj gs) 
+        return True
 
         
-    render rs@RetryScene{} gameargs = 
-        return True
+    render rs@RetryScene{} gameargs = do
+      mainSurf <- SDL.getVideoSurface
+      renderNumer mainSurf (imageSet gameargs) 435 370 (eraseCnt gameargs)
+      return True
                     
 --nullBlockObj =
 --    BlockObj (-1) (-1) BS_Stay BlockNone Nothing
 
 blackImageObj imageset =
-    ImageObj 0 0 640 480 0 (blackBG imageset)
+    ImageObj 0 0 640 480 0 0x00000000 (blackBG imageset)
 
-main :: IO ()
-main = do
-  SDL.init [SDL.InitEverything]
-  SDL.setVideoMode 640 480 32 []
-  SDL.setCaption "hblock" "hblock"
-     
-  imageset <- loadImages
-  stdgen <- getStdGen
-  let gameargs = GameArgs {
+initGameArgs :: ImageSet -> StdGen -> GameArgs
+initGameArgs imageset stdgen =
+    GameArgs {
          gameState = GS_Removing,
          hiScore    = 0,
          score      = 0,
@@ -204,26 +224,35 @@ main = do
          mouseX     = 0,
          mouseY     = 0,
          mouseBtn   = [],
-         gameOverObj = ImageObj 0 0 640 480 0 (blackBG imageset),
-         gameScenes = []
+         gameScenes = [],
+         removedSceneTypes = [],
+         appendedScenes = []
        }
-              
-  fpsLoop 33 checkEvent ioFrame nextFrame renderFrame $   execState initField gameargs
+             
+main :: IO ()
+main = do
+  SDL.init [SDL.InitEverything]
+  SDL.setVideoMode 640 480 32 []
+  SDL.setCaption "hblock" "hblock"
+     
+  imageset <- loadImages
+  stdgen <- getStdGen
+  fpsLoop 33 checkEvent ioFrame nextFrame renderFrame $ execState initField $ initGameArgs imageset stdgen
   SDL.quit
      
 loadImages:: IO ImageSet
-loadImages = do
-    blockA <- SDL.loadBMP "img/blue.bmp"
-    blockB <- SDL.loadBMP "img/yellow.bmp"
-    blockC <- SDL.loadBMP "img/purple.bmp"
-    blockG <- SDL.loadBMP "img/guard.bmp"
-    frame  <- SDL.loadBMP "img/rotate_frame.bmp"
-    numbers <- mapM SDL.loadBMP ["img/n" ++ (show a) ++ ".bmp" | a <- [0..9]]
-    backGround <- SDL.loadBMP "img/background.bmp"
-    timeArrow <- SDL.loadBMP "img/timearrow.bmp"
-    blackBG <- SDL.loadBMP "img/black.bmp"
-    gameover <- SDL.loadBMP "img/gameover.bmp"
-    return $ ImageSet blockA blockB blockC blockG frame numbers backGround timeArrow blackBG gameover
+loadImages =
+    ImageSet
+    <$> SDL.loadBMP "img/blue.bmp"
+            <*> SDL.loadBMP "img/yellow.bmp"
+            <*> SDL.loadBMP "img/purple.bmp"
+            <*> SDL.loadBMP "img/guard.bmp"
+            <*> SDL.loadBMP "img/rotate_frame.bmp"
+            <*> mapM SDL.loadBMP ["img/n" ++ (show a) ++ ".bmp" | a <- [0..9]]
+            <*> SDL.loadBMP "img/background.bmp"
+            <*> SDL.loadBMP "img/timearrow.bmp"
+            <*> SDL.loadBMP "img/black.bmp"
+            <*> SDL.loadBMP "img/gameover.bmp"
 
 checkEvent:: Event -> Bool
 checkEvent (KeyUp (Keysym SDLK_ESCAPE _ _)) = False
@@ -235,10 +264,14 @@ ioFrame gameargs = do
     (x, y, b) <- getMouseState
     return gameargs{mouseX = x, mouseY = y, mouseBtn = b}
 
+mouseBtnLeft :: GameArgs -> Bool
+mouseBtnLeft gameargs = 
+    any (== ButtonLeft) $ mouseBtn gameargs
+           
 gameStateStay:: State GameArgs Bool
 gameStateStay = do
   gameargs <- get
-  case (any (== ButtonLeft) $ mouseBtn gameargs) of
+  case (mouseBtnLeft gameargs) of
     True -> do 
       modifyFieldBlock $ setBlockRotateState $ mousePos2fieldPos (mouseX gameargs, mouseY gameargs)
       decLifeTime 10
@@ -348,14 +381,6 @@ gameStateRotating = do
 
 gameStateGameOver:: State GameArgs Bool
 gameStateGameOver = do
-  gameargs <- get
-  let gobj = gameOverObj gameargs
-  let a = fromInteger $ min 255 $ toInteger $ alpha gobj + 10
-  put $ moveScenes $ if a < 155 then 
-                           gameargs{gameOverObj = gobj{alpha = a}}
-                       else
-                           gameargs{gameOverObj = gobj{alpha = a},
-                                                  gameState = GS_Retry}
   return True
          
 nextFrame:: GameArgs -> Maybe GameArgs
@@ -364,6 +389,7 @@ nextFrame ga =
     where
       nextFrame':: State GameArgs Bool
       nextFrame' = do
+        moveScenes
         gameargs <- get
         case gameState gameargs of
           GS_Stay -> 
@@ -380,19 +406,26 @@ nextFrame ga =
               return True
         return True
 
-execScenes :: (GameScene -> GameArgs -> (Bool, GameArgs, GameScene)) -> GameArgs -> GameArgs
-execScenes f gameargs =
-    let
-        (gameargsNew, gameScenesNew) =
-            Util.mapAccumFilterR (\ga scene -> case f scene ga of
-                                                 (True, g, s) -> (g, Just s)
-                                                 (False, g, _) -> (g, Nothing))
-                                                               gameargs (gameScenes gameargs)
-    in
-      gameargsNew {gameScenes = gameScenesNew}
-    
-              
-moveScenes :: GameArgs -> GameArgs
+execScenes :: (GameScene -> State GameArgs GameScene) -> State GameArgs ()
+execScenes f = do
+  gameargs <- get
+  ngs <- mapM f (gameScenes gameargs)
+  ngss <- nextGameScenes ngs
+  modify $ \ga -> ga{gameScenes = ngss,
+                    removedSceneTypes = [],
+                    appendedScenes = []}
+    where
+      nextGameScenes :: [GameScene] -> State GameArgs [GameScene]
+      nextGameScenes ngs = do
+            gameargs <- get
+            return $ mergeBy (comparing sceneType) (sortBy (comparing sceneType) $ appendedScenes gameargs) $
+                           remove (removedSceneTypes gameargs) ngs
+
+      remove :: [GameSceneType] -> [GameScene] -> [GameScene]
+      remove gst gs = 
+          foldr (\a b -> filter (\x -> a /= (sceneType x)) b) gs gst
+          
+moveScenes :: State GameArgs ()
 moveScenes = execScenes move
 
 renderScenes :: GameArgs -> IO ()
@@ -429,8 +462,11 @@ renderFrame fps gameargs = do
   renderNumer mainSurf imageset 635  70 (hiScore gameargs)  
   renderNumer mainSurf imageset 635 170 (score gameargs)
   renderNumer mainSurf imageset 635 270 (chain gameargs)
-  renderNumer mainSurf imageset 635 370 (level gameargs)
+  renderNumer mainSurf imageset 635 370 (eraseCnt gameargs)
 
+  renderNumer mainSurf imageset 635 420 (fromIntegral $ length $ gameScenes gameargs)
+
+              
   -- renderNumer mainSurf imageSet 620 430 $ floor fps
 
   renderTimeArrow mainSurf imageset (lifeTime gameargs)
@@ -483,12 +519,6 @@ renderTimeArrow mainSurf imageset lifetime
                (Just (Rect (timeArrowLeft+nx*timeArrowSize) timeArrowTop 
                             timeArrowSize timeArrowSize))
 
-renderImage:: Surface -> Surface -> Int -> Int -> Int -> Int -> Word8 -> Data.Word.Word32 -> IO Bool
-renderImage srcSurf dstSurf x y w h a ck = do
-  SDL.setColorKey srcSurf [SrcColorKey, RLEAccel] $ SDL.Pixel ck
-  SDL.setAlpha srcSurf [SrcAlpha] a
-  SDL.blitSurface srcSurf Nothing dstSurf (Just (Rect x y w h))
-
 -- renderGameOver:: Surface -> ImageSet -> GameArgs -> IO Bool     
 -- renderGameOver mainSurf imageset gameargs 
 --     | (gameState gameargs) == GS_GameOver = 
@@ -515,7 +545,7 @@ createBlockObj x y blocktype = do
           | blocktype == BlockG = blockG imageset
       imageobj = ImageObj (fromIntegral $ defaultBlockImgPosX x)
                            (fromIntegral $ defaultBlockImgPosY y)
-                           fieldBlockSize fieldBlockSize 255 image
+                           fieldBlockSize fieldBlockSize 255 0x00000000 image
   
   return $ BlockObj BS_Stay blocktype imageobj
 
@@ -542,22 +572,11 @@ initField:: State GameArgs ()
 initField = do
   blockList <- sequence [createRandomBlockObj x y 
                              | x<-[0..(fieldBlockMaxX-1)], y<-[0..(fieldBlockMaxY-1)]]
-  putFieldBlock $ splitEvery fieldBlockMaxX blockList
+  putFieldBlock $ Util.splitEvery fieldBlockMaxX blockList
 
 renderFiledBlock:: Surface -> FieldBlock -> IO Bool
 renderFiledBlock mainSurf fieldblock =
   fmap and $ mapM (\b -> renderImageObj mainSurf (imageObj b)) $ join fieldblock
-
-renderImageObj:: Surface -> ImageObj -> IO Bool
-renderImageObj mainSurf imageobj 
-    | (alpha imageobj) > 0 = do
-     SDL.setColorKey (image imageobj) [SrcColorKey, RLEAccel] (SDL.Pixel 0x00000000)
-     SDL.setAlpha (image imageobj) [SrcAlpha] $ min (alpha imageobj) 255
-     SDL.blitSurface (image imageobj) Nothing mainSurf
-                             (Just (Rect (floor $ px imageobj) (floor $ py imageobj)
-                             (width imageobj) (height imageobj)))
-    | otherwise = 
-        return True
 
 mousePos2fieldPos:: (Int, Int) -> (Int, Int)
 mousePos2fieldPos (x, y) =
@@ -788,15 +807,11 @@ defaultBlockImgPosY y =
 decLifeTime:: Integer -> State GameArgs ()
 decLifeTime n = do
   gameargs <- get
-  let lt = (lifeTime gameargs) - n
-  put $
-      case lt > 0 of
-        True ->
-            gameargs{lifeTime = lt}
-        False ->
-            gameargs{lifeTime  = 0,
-                     gameState = GS_GameOver,
-                     gameScenes = (newGameOverScene $ imageSet gameargs) : (gameScenes gameargs)}
+  let nlt = max 0 $ (lifeTime gameargs) - n
+  put gameargs{lifeTime = nlt}
+  when(nlt == 0) $ do
+       appendScene $ newGameOverScene $ imageSet gameargs
+       setGameState GS_GameOver
 
 --setBlockImgPos:: BlockObj -> BlockObj
 --setBlockImgPos obj =
@@ -805,7 +820,6 @@ decLifeTime n = do
 --        imgY = 50 + (fieldBlockMaxY-(posY obj))*32
 --    in
 --        obj {imageObj = ((imageObj obj) {x = imgX, y = imgY})}
-
 
 setLevel:: State GameArgs ()
 setLevel =

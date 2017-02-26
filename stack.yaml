@@ -43,7 +43,8 @@ packages:
 extra-deps:
   - SDL-0.6.5.1
   - SDL-image-0.6.1.2
-
+  - lists-0.4.2
+  - list-extras-0.4.1.4
 # Override default flag values for local packages and extra-deps
 flags: {}
 
