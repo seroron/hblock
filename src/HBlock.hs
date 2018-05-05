@@ -20,9 +20,9 @@ import Util
 import Fps
 import Graphics
 
-fieldBlockMaxX =10
-fieldBlockMaxY =10
-fieldBlockSize =38
+fieldBlockMaxX = 10
+fieldBlockMaxY = 10
+fieldBlockSize = 38
 
 fieldLeft = 25
 fieldTop  = 30
@@ -31,14 +31,13 @@ fieldBottom = fieldTop + fieldBlockMaxY*fieldBlockSize
                  
 systemFPSTime  = 1000/30
 
-initLifeTime = 30
+timeArrowUnitLife = 150
+initLifeTime      = timeArrowUnitLife*10
+maxLifeTime       = timeArrowUnitLife*14
 
-maxLifeTime = toInteger 500
-
-timeArrowTop = 436
+timeArrowTop  = 436
 timeArrowLeft = 110
 timeArrowSize = 36
-timeArrowUnitLife = 90
 
                     
 data ImageSet = ImageSet {
@@ -233,7 +232,7 @@ instance GameObject GameScene where
       renderNumer mainSurf imageset 635  70 (hiScore gameargs)  
       renderNumer mainSurf imageset 635 170 (score gameargs)
       renderNumer mainSurf imageset 635 270 (chain gameargs)
-      renderNumer mainSurf imageset 635 370 (eraseCnt gameargs)
+      renderNumer mainSurf imageset 635 370 (level gameargs)
 
       -- renderNumer mainSurf imageset 635 420 (fromIntegral $ length $ gameScenes gameargs)
       -- renderNumer mainSurf imageSet 620 430 $ floor fps
@@ -402,8 +401,10 @@ gameStateRotating = do
             setLevel
             addEraseBounus eraseNum
             setGameState GS_Removing
-      else 
-          setGameState GS_Stay
+      else
+          do
+            clearChain
+            setGameState GS_Stay
       return True
              
     nextState _ =
@@ -467,12 +468,10 @@ renderScenes gameargs =
     mapM_  (\x -> render x gameargs) (gameScenes gameargs)                 
              
 addEraseBounus:: Int -> State GameArgs ()
-addEraseBounus 0 =
-    modify $ \gameargs -> gameargs{chain = 0}
 addEraseBounus eraseNum = do
   gameargs <- get
-  let newScore = (score gameargs) + (toInteger eraseNum)*10*((chain gameargs)+1)
-  let newLifeTime = min maxLifeTime $ (lifeTime gameargs) + (toInteger eraseNum)*((chain gameargs)+1)
+  let newScore = (score gameargs) + (toInteger eraseNum)*((chain gameargs)+1)*(level gameargs)*10
+  let newLifeTime = min maxLifeTime $ (lifeTime gameargs) + (toInteger eraseNum)*5
   put gameargs{chain    = (chain gameargs) + 1,
                hiScore  = max (hiScore gameargs) newScore, 
                score    = newScore,
@@ -481,10 +480,6 @@ addEraseBounus eraseNum = do
 clearChain:: State GameArgs ()
 clearChain = do
   modify $ \gameargs -> gameargs{chain = 0}
-
-incChain:: State GameArgs ()
-incChain = do
-  modify $ \gameargs -> gameargs{chain = (chain gameargs) + 1}
                         
 renderFrame:: Float -> GameArgs -> IO Bool
 renderFrame fps gameargs = do
@@ -575,16 +570,15 @@ createRandomBlockObj x y = do
     nextBlockType:: State GameArgs BlockType
     nextBlockType = do
       gameargs <- get
-      let (num, newgen) =  randomR (0, 3) $ stdGen gameargs
+      let (num, newgen) =  randomR (0, 300+(level gameargs)*20) $ stdGen gameargs
       put gameargs{stdGen = newgen}
       return $ putBlock num  
 
-    putBlock:: Int -> BlockType
-    putBlock 0 = BlockA
-    putBlock 1 = BlockB
-    putBlock 2 = BlockC
-    putBlock 3 = BlockG
-    putBlock _ = BlockG
+    putBlock:: Integer -> BlockType
+    putBlock n | n<100 = BlockA
+    putBlock n | n<200 = BlockB
+    putBlock n | n<300 = BlockC
+    putBlock _         = BlockG
 
 initGame:: State GameArgs ()
 initGame = do
@@ -850,7 +844,7 @@ decLifeTime n = do
 
 setLevel:: State GameArgs ()
 setLevel =
-    modify $ \gameargs -> gameargs{level = eraseCnt gameargs  `divint` 10 + 1}
+    modify $ \gameargs -> gameargs{level = eraseCnt gameargs  `divint` 5 + 1}
 
 setGameState:: GameState -> State GameArgs ()
 setGameState gs =
@@ -869,7 +863,7 @@ loadHiScore = do
              False -> fmap readMaybe $ hGetLine h
   hClose h
   return $ case score of
-             Just a  -> a
+             Just a  -> max 0 a
              Nothing -> 0
                           
 saveHiScore :: Integer -> IO ()
