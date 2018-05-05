@@ -32,9 +32,8 @@ test-suite hblock-test
   type:                exitcode-stdio-1.0
   hs-source-dirs:      test
   main-is:             Spec.hs
-  build-depends:       base
-                     , hblock
-                     , hspec
+  build-depends:       base, hblock, hspec,
+                       directory
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   default-language:    Haskell2010
 
