@@ -42,7 +42,7 @@ fieldBottom = fieldTop + fieldBlockMaxY*fieldBlockSize
                  
 systemFPSTime  = 1000/30
 
-initLifeTime = 300
+initLifeTime = 30
 
 maxLifeTime = toInteger 500
 
@@ -162,7 +162,7 @@ newGameOverScene :: ImageSet -> GameScene
 newGameOverScene imageSet = 
     GameOverScene {sceneType          = Gst_GameOverScene, 
                    gos_backPlane      = blackImageObj imageSet,
-                   gos_gameOverImgObj = ImageObj 0 0 640 480 255 0x00000000 (gameover imageSet)}
+                   gos_gameOverImgObj = ImageObj 150 150 640 480 255 0x00000000 (gameover imageSet)}
 
 newRetryScene :: GameScene
 newRetryScene = 
@@ -211,6 +211,8 @@ instance GameObject GameScene where
         True -> do
             removeScene Gst_GameOverScene
             removeScene Gst_RetryScene
+            modify resetGameArgs
+            initField
             return gs
         False ->
             return gs
@@ -273,7 +275,19 @@ initGameArgs imageset stdgen =
          removedSceneTypes = [],
          appendedScenes = []
        }
-             
+
+resetGameArgs :: GameArgs -> GameArgs
+resetGameArgs gameargs =
+    gameargs {
+         gameState = GS_Removing,
+         score      = 0,
+         chain      = 0,
+         level      = 1,
+         eraseCnt   = 0,
+         lifeTime   = initLifeTime,
+         fieldBlock = [[]]
+}
+    
 main :: IO ()
 main = do
   SDL.init [SDL.InitEverything]
@@ -282,7 +296,7 @@ main = do
      
   imageset <- loadImages
   stdgen <- getStdGen
-  let ga = execState initField $ initGameArgs imageset stdgen
+  let ga = execState initGame $ initGameArgs imageset stdgen
   fpsLoop 33 checkEvent ioFrame nextFrame renderFrame ga
   SDL.quit
      
@@ -577,10 +591,17 @@ createRandomBlockObj x y = do
     putBlock 3 = BlockG
     putBlock _ = BlockG
 
+initGame:: State GameArgs ()
+initGame = do
+  initScene
+  initField
+           
+initScene:: State GameArgs ()
+initScene = do
+  appendScene newGameMainScene              
+                 
 initField:: State GameArgs ()
 initField = do
-  appendScene newGameMainScene
-                        
   blockList <- sequence [createRandomBlockObj x y 
                              | x<-[0..(fieldBlockMaxX-1)], y<-[0..(fieldBlockMaxY-1)]]
   putFieldBlock $ Util.splitEvery fieldBlockMaxX blockList
