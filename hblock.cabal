@@ -15,20 +15,17 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Fps, Util, Graphics
-  build-depends:       base >= 4.7 && < 5
-                     , SDL
-                     , mtl
+  exposed-modules:     HBlock, Fps, Util, Graphics
+  build-depends:       base
+                     , random, GLUT, SDL,
+                       SDL-image, base, mtl, multiset, lens, lists
   default-language:    Haskell2010
 
 executable hblock
   hs-source-dirs:      app
   main-is:             Main.hs
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
-  build-depends:       base
-                     , hblock
-                     , random, GLUT, SDL,
-                       SDL-image, base, mtl, multiset, lens, lists
+  build-depends:       base, hblock
   default-language:    Haskell2010
 
 test-suite hblock-test
