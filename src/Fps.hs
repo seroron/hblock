@@ -20,11 +20,10 @@ import Data.Word
 import Graphics.UI.SDL as SDL
 
 fpsLoop:: Word32 -> (Event -> Bool) -> (a -> IO a) -> 
-            (a -> Maybe a) -> (Float -> a -> IO Bool) -> a -> IO ()
+            (a -> Maybe a) -> (Float -> a -> IO Bool) -> a -> IO a
 fpsLoop systemFPSTime eventFunc moveIOFunc moveFunc renderFunc funcArg = do
   time <- SDL.getTicks
   fpsLoop' time funcArg
-  return ()
     where
 --      fpsLoop':: Word32 -> a -> IO()  
       fpsLoop' prevTime arg = do
@@ -33,7 +32,9 @@ fpsLoop systemFPSTime eventFunc moveIOFunc moveFunc renderFunc funcArg = do
         (prevTime', arg') <- renderLoop loopCnt prevTime arg
         SDL.delay 1
         event <- liftIO SDL.pollEvent
-        when (eventFunc event) $ fpsLoop' prevTime' arg'
+        case eventFunc event of
+          True -> fpsLoop' prevTime' arg'
+          False -> return arg'
            
 --      moveLoop:: Word32 -> Word32 -> a -> IO (Word32, a)
       moveLoop loopCnt prevTime (Just arg) --TODO

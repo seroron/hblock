@@ -16,6 +16,7 @@
 module Main where
 
 import System.Random as Random
+import System.IO
 import Graphics.UI.SDL as SDL
 import Data.List
 import Data.Lists
@@ -26,6 +27,7 @@ import Control.Monad
 import Control.Monad.State
 import Debug.Trace
 import Control.Lens
+import Text.Read (readMaybe)
     
 import Util
 import Fps
@@ -297,7 +299,9 @@ main = do
   imageset <- loadImages
   stdgen <- getStdGen
   let ga = execState initGame $ initGameArgs imageset stdgen
-  fpsLoop 33 checkEvent ioFrame nextFrame renderFrame ga
+  hs <- loadHiScore
+  newGa <- fpsLoop 33 checkEvent ioFrame nextFrame renderFrame $ ga{hiScore = hs}
+  saveHiScore (hiScore newGa)
   SDL.quit
      
 loadImages:: IO ImageSet
@@ -477,12 +481,14 @@ renderScenes gameargs =
 addEraseBounus:: Int -> State GameArgs ()
 addEraseBounus 0 =
     modify $ \gameargs -> gameargs{chain = 0}
-addEraseBounus eraseNum =
-    modify
-    $ \gameargs -> gameargs{chain    = (chain gameargs) + 1,
-                            score    = (score gameargs) + (toInteger eraseNum)*10*((chain gameargs)+1),
-                            lifeTime = min maxLifeTime $
-                                       (lifeTime gameargs) + (toInteger eraseNum)*((chain gameargs)+1)}
+addEraseBounus eraseNum = do
+  gameargs <- get
+  let newScore = (score gameargs) + (toInteger eraseNum)*10*((chain gameargs)+1)
+  let newLifeTime = min maxLifeTime $ (lifeTime gameargs) + (toInteger eraseNum)*((chain gameargs)+1)
+  put gameargs{chain    = (chain gameargs) + 1,
+               hiScore  = max (hiScore gameargs) newScore, 
+               score    = newScore,
+               lifeTime = newLifeTime}
 
 clearChain:: State GameArgs ()
 clearChain = do
@@ -865,4 +871,21 @@ setGameState gs =
 incEraseCnt:: State GameArgs ()
 incEraseCnt =
     modify $ \gameargs -> gameargs{eraseCnt = (eraseCnt gameargs) + 1}
+
+loadHiScore :: IO Integer
+loadHiScore = do
+  h <- openFile "save.txt" ReadWriteMode
+  iseof <- hIsEOF h
+  score <- case iseof of
+             True  -> return Nothing
+             False -> fmap readMaybe $ hGetLine h
+  hClose h
+  return $ case score of
+             Just a  -> a
+             Nothing -> 0
                           
+saveHiScore :: Integer -> IO ()
+saveHiScore hiscore = 
+    withFile "save.txt" WriteMode $ \h -> hPutStrLn h $ show hiscore
+                                          
+x
