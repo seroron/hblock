@@ -62,8 +62,9 @@ data ImageSet = ImageSet {
       backGround :: Surface,
       timeArrow :: Surface,
       blackBG :: Surface,
-      gameover :: Surface
-}
+      gameover :: Surface,
+      retry :: Surface
+    }
 
 
 data BlockType =
@@ -145,11 +146,10 @@ data GameScene =
       sceneType :: GameSceneType,
       gos_backPlane :: ImageObj,
       gos_gameOverImgObj :: ImageObj
---      gos_alpha :: Int
     } |
     RetryScene {
       sceneType :: GameSceneType,
-      cnt :: Int
+      gos_retryImgObj :: ImageObj
     }
 
 --makeLenses ''GameScene
@@ -164,10 +164,10 @@ newGameOverScene imageSet =
                    gos_backPlane      = blackImageObj imageSet,
                    gos_gameOverImgObj = ImageObj 150 150 640 480 255 0x00000000 (gameover imageSet)}
 
-newRetryScene :: GameScene
-newRetryScene = 
-    RetryScene{sceneType = Gst_RetryScene,   
-               cnt       = 0}
+newRetryScene :: ImageSet -> GameScene
+newRetryScene imageSet = 
+    RetryScene{sceneType = Gst_RetryScene,
+               gos_retryImgObj    = ImageObj 185 300 640 480 255 0x00000000 (retry imageSet)}
 
 appendScene :: GameScene -> State GameArgs ()
 appendScene gs =
@@ -200,7 +200,8 @@ instance GameObject GameScene where
              do
                let nalpha = min 155 $ (alpha $ gos_backPlane gs) + 10
                let ngs = gs {gos_backPlane = (gos_backPlane gs){alpha = nalpha}}
-               when(nalpha == 155) $ appendScene newRetryScene 
+               gameargs <- get
+               when(nalpha == 155) $ appendScene $ newRetryScene $ imageSet gameargs
                return ngs
          | otherwise = do
                return gs
@@ -230,8 +231,7 @@ instance GameObject GameScene where
       renderNumer mainSurf imageset 635 270 (chain gameargs)
       renderNumer mainSurf imageset 635 370 (eraseCnt gameargs)
 
-      renderNumer mainSurf imageset 635 420 (fromIntegral $ length $ gameScenes gameargs)
-
+      -- renderNumer mainSurf imageset 635 420 (fromIntegral $ length $ gameScenes gameargs)
       -- renderNumer mainSurf imageSet 620 430 $ floor fps
 
       renderTimeArrow mainSurf imageset (lifeTime gameargs)
@@ -244,9 +244,9 @@ instance GameObject GameScene where
         renderImageObj mainSurf (gos_gameOverImgObj gs) 
         return True
         
-    render rs@RetryScene{} gameargs = do
+    render gs@RetryScene{} gameargs = do
       mainSurf <- SDL.getVideoSurface
-      renderNumer mainSurf (imageSet gameargs) 435 370 (eraseCnt gameargs)
+      renderImageObj mainSurf (gos_retryImgObj gs) 
       return True
                     
 --nullBlockObj =
@@ -313,6 +313,7 @@ loadImages =
             <*> SDL.loadBMP "img/timearrow.bmp"
             <*> SDL.loadBMP "img/black.bmp"
             <*> SDL.loadBMP "img/gameover.bmp"
+            <*> SDL.loadBMP "img/retry.bmp"
 
 checkEvent:: Event -> Bool
 checkEvent (KeyUp (Keysym SDLK_ESCAPE _ _)) = False
@@ -603,7 +604,7 @@ initScene = do
 initField:: State GameArgs ()
 initField = do
   blockList <- sequence [createRandomBlockObj x y 
-                             | x<-[0..(fieldBlockMaxX-1)], y<-[0..(fieldBlockMaxY-1)]]
+                             | x<-[0..(fieldBlockMaxX-1)], y<-[fieldBlockMaxY..(fieldBlockMaxY*2-1)]]
   putFieldBlock $ Util.splitEvery fieldBlockMaxX blockList
 
 renderFiledBlock:: Surface -> FieldBlock -> IO Bool
