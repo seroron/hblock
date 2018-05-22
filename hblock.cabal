@@ -18,7 +18,7 @@ library
   exposed-modules:     HBlock, Fps, Util, Graphics
   build-depends:       base
                      , random, GLUT, SDL,
-                       SDL-image, base, mtl, multiset, lens, lists
+                       base, mtl, multiset, lens, lists
   default-language:    Haskell2010
 
 executable hblock
