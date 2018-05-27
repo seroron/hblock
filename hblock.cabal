@@ -1,16 +1,15 @@
 name:                hblock
 version:             0.1.0.0
-synopsis:            Initial project template from stack
-description:         Please see README.md
+synopsis:            Block puzzle in Haskell
+description:         Block puzzle in Haskell
 homepage:            https://seroron.com
-license:             BSD3
+license:             MIT
 license-file:        LICENSE
-author:              Author name here
-maintainer:          example@example.com
-copyright:           2016 Author name here
-category:            Web
+author:              Kenichi HIROSE
+maintainer:          seroron@outlook.com
+copyright:           2018 Kenichi HIROSE
+category:            Game
 build-type:          Simple
--- extra-source-files:
 cabal-version:       >=1.10
 
 library
