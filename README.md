@@ -6,7 +6,9 @@ Block puzzle in Haskell
 
 ## Build & Execute
 
-To Build, use [Stack](https://docs.haskellstack.org)
+To Build, use [Stack](https://docs.haskellstack.org).
+
+Or, you could also download binary from [Release Page](https://github.com/seroron/hblock/releases).
 
 ### Ubuntu
 
